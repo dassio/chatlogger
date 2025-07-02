@@ -11,7 +11,7 @@
     "Other"
   ],
   "activationEvents": [
-    "*"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "extensionKind": [
@@ -71,6 +71,11 @@
       {
         "command": "chatlogger.clearHistory",
         "title": "🗑️ Clear Chat History",
+        "category": "ChatLogger"
+      },
+      {
+        "command": "chatlogger.listVirtualDocs",
+        "title": "🗂️ List Virtual Docs",
         "category": "ChatLogger"
       }
     ],

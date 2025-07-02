@@ -43,11 +43,29 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }
     });
+
+    // Command to list all open virtual documents
+    const listVirtualDocsCommand = vscode.commands.registerCommand('chatlogger.listVirtualDocs', () => {
+        const docs = vscode.workspace.textDocuments;
+        let found = false;
+        chatLogger.outputChannel.appendLine('--- Open Virtual Documents ---');
+        for (const doc of docs) {
+            if (doc.uri.scheme !== 'file') {
+                found = true;
+                chatLogger.outputChannel.appendLine(`Virtual doc: ${doc.uri.toString()} (scheme: ${doc.uri.scheme})`);
+            }
+        }
+        if (!found) {
+            chatLogger.outputChannel.appendLine('No open virtual documents found.');
+        }
+        chatLogger.outputChannel.show();
+    });
     
     // Add commands to context subscriptions
     context.subscriptions.push(saveConversationCommand);
     context.subscriptions.push(viewHistoryCommand);
     context.subscriptions.push(clearHistoryCommand);
+    context.subscriptions.push(listVirtualDocsCommand);
     
     // Update configuration when it changes
     const configChangeListener = vscode.workspace.onDidChangeConfiguration(event => {

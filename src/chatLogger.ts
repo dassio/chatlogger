@@ -35,7 +35,7 @@ export interface Conversation {
 export class ChatLogger {
     private conversations: Map<string, Conversation> = new Map();
     private context: vscode.ExtensionContext;
-    private outputChannel: vscode.OutputChannel;
+    public outputChannel: vscode.OutputChannel;
     private config: any;
 
     constructor(context: vscode.ExtensionContext) {
@@ -62,26 +62,25 @@ export class ChatLogger {
     private async loadSavedConversations() {
         try {
             const storagePath = this.getStoragePath();
-            if (await fs.pathExists(storagePath)) {
-                const files = await fs.readdir(storagePath);
-                for (const file of files) {
-                    if (file.endsWith('.json')) {
-                        const filePath = path.join(storagePath, file);
-                        const content = await fs.readFile(filePath, 'utf8');
-                        const conversation: Conversation = JSON.parse(content);
-                        
-                        // Convert string dates back to Date objects
-                        conversation.createdAt = new Date(conversation.createdAt);
-                        conversation.updatedAt = new Date(conversation.updatedAt);
-                        conversation.messages.forEach(msg => {
-                            msg.timestamp = new Date(msg.timestamp);
-                        });
-                        
-                        this.conversations.set(conversation.id, conversation);
-                    }
+            await fs.ensureDir(storagePath);
+            const files = await fs.readdir(storagePath);
+            for (const file of files) {
+                if (file.endsWith('.json')) {
+                    const filePath = path.join(storagePath, file);
+                    const content = await fs.readFile(filePath, 'utf8');
+                    const conversation: Conversation = JSON.parse(content);
+                    
+                    // Convert string dates back to Date objects
+                    conversation.createdAt = new Date(conversation.createdAt);
+                    conversation.updatedAt = new Date(conversation.updatedAt);
+                    conversation.messages.forEach(msg => {
+                        msg.timestamp = new Date(msg.timestamp);
+                    });
+                    
+                    this.conversations.set(conversation.id, conversation);
                 }
-                this.outputChannel.appendLine(`Loaded ${this.conversations.size} saved conversations`);
             }
+            this.outputChannel.appendLine(`Loaded ${this.conversations.size} saved conversations`);
         } catch (error) {
             this.outputChannel.appendLine(`Error loading conversations: ${error}`);
         }
