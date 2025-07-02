@@ -87,12 +87,16 @@ export class ChatLogger {
             const storagePath = this.getStoragePath();
             await fs.ensureDir(storagePath);
 
-            // Use composerId as the file name
+            // Use createdAt date and composerId as the file name
             const composerId = conversation.metadata.composerId;
             if (!composerId) {
                 throw new Error('Cannot save conversation without composerId');
             }
-            const fileName = `${composerId}.json`;
+            const createdAt = conversation.createdAt instanceof Date
+                ? conversation.createdAt
+                : new Date(conversation.createdAt);
+            const isoString = createdAt.toISOString().replace(/[:.]/g, '-');
+            const fileName = `${isoString}_${composerId}.json`;
             const filePath = path.join(storagePath, fileName);
 
             let mergedConversation = conversation;
