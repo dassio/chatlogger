@@ -1,4 +1,8 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
+import { Database } from 'sqlite3';
 import { ChatLogger, Conversation, ChatMessage } from './chatLogger';
 
 export class VirtualDocumentMonitor implements vscode.Disposable {
@@ -6,6 +10,11 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
     private currentConversation: Conversation | null = null;
     private config: any;
+    private timer: NodeJS.Timeout | null = null;
+    private isCheckingForChanges = false;
+    private lastProcessedConversations = new Set<string>();
+    private db: Database | null = null;
+
 
     constructor(chatLogger: ChatLogger) {
         this.chatLogger = chatLogger;
@@ -16,7 +25,8 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
         const config = vscode.workspace.getConfiguration('chatlogger');
         this.config = {
             autoSave: config.get('autoSave.enabled', true),
-            ignoreCodeOutput: config.get('ignoreCodeOutput', true)
+            ignoreCodeOutput: config.get('ignoreCodeOutput', true),
+            checkInterval: config.get('checkInterval', 30000) // 30 seconds
         };
     }
 
@@ -25,232 +35,242 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
     }
 
     public start(): void {
+        this.chatLogger.outputChannel.appendLine('VirtualDocumentMonitor.start() called');
+        
         if (!this.config.autoSave) {
+            this.chatLogger.outputChannel.appendLine('Auto-save is disabled, not starting monitor');
             return;
         }
 
-        // Monitor for document changes
-        const documentChangeListener = vscode.workspace.onDidChangeTextDocument(
-            this.handleDocumentChange.bind(this)
-        );
-
-        // Monitor for active editor changes
-        const activeEditorListener = vscode.window.onDidChangeActiveTextEditor(
-            this.handleActiveEditorChange.bind(this)
-        );
-
-        // Monitor for document opens
-        const documentOpenListener = vscode.workspace.onDidOpenTextDocument(
-            this.handleDocumentOpen.bind(this)
-        );
-
-        this.disposables.push(
-            documentChangeListener,
-            activeEditorListener,
-            documentOpenListener
-        );
+        this.chatLogger.outputChannel.appendLine('Auto-save is enabled, initializing...');
+        this.initializeDatabase();
+        this.startPeriodicCheck();
+        this.chatLogger.outputChannel.appendLine('VirtualDocumentMonitor started successfully');
     }
 
-    private async handleDocumentChange(event: vscode.TextDocumentChangeEvent): Promise<void> {
-        const document = event.document;
-        
-        // Check if this is a Cursor chat document
-        if (this.isCursorChatDocument(document)) {
-            await this.processChatDocument(document);
-        }
+    private getCursorStoragePath(): string {
+        // Windows path: C:\Users\{username}\AppData\Roaming\Cursor\User\globalStorage
+        const username = os.userInfo().username;
+        return path.join('C:', 'Users', username, 'AppData', 'Roaming', 'Cursor', 'User', 'globalStorage');
     }
 
-    private async handleActiveEditorChange(editor: vscode.TextEditor | undefined): Promise<void> {
-        if (editor && this.isCursorChatDocument(editor.document)) {
-            await this.processChatDocument(editor.document);
-        }
+    private getCursorDatabasePath(): string {
+        const cursorStoragePath = this.getCursorStoragePath();
+        return path.join(cursorStoragePath, 'state.vscdb');
     }
 
-    private async handleDocumentOpen(document: vscode.TextDocument): Promise<void> {
-        if (this.isCursorChatDocument(document)) {
-            await this.processChatDocument(document);
-        }
-    }
-
-    private isCursorChatDocument(document: vscode.TextDocument): boolean {
-        const fileName = document.fileName.toLowerCase();
-        const uri = document.uri.toString();
-        
-        // Check for Cursor's virtual document patterns
-        return (
-            uri.includes('cursor://') ||
-            uri.includes('chat') ||
-            uri.includes('conversation') ||
-            fileName.includes('chat') ||
-            fileName.includes('conversation') ||
-            document.languageId === 'markdown' && (
-                fileName.includes('cursor') ||
-                fileName.includes('ai') ||
-                fileName.includes('assistant')
-            )
-        );
-    }
-
-    private async processChatDocument(document: vscode.TextDocument): Promise<void> {
+    private initializeDatabase(): void {
         try {
-            const content = document.getText();
-            if (!content.trim()) {
+            const dbPath = this.getCursorDatabasePath();
+            
+            if (!fs.existsSync(dbPath)) {
+                this.chatLogger.outputChannel.appendLine(`Cursor database does not exist: ${dbPath}`);
                 return;
             }
 
-            // Parse the chat content
-            const conversation = this.parseChatContent(content, document);
-            if (conversation) {
-                this.currentConversation = conversation;
-                this.chatLogger.addConversation(conversation);
-                
-                // Auto-save if enabled
-                if (this.config.autoSave) {
-                    await this.chatLogger.saveConversation(conversation);
+            this.db = new Database(dbPath, (err) => {
+                if (err) {
+                    this.chatLogger.outputChannel.appendLine(`Failed to initialize database: ${err}`);
+                } else {
+                    this.chatLogger.outputChannel.appendLine(`Database connection established: ${dbPath}`);
                 }
-            }
+            });
         } catch (error) {
-            console.error('Error processing chat document:', error);
+            this.chatLogger.outputChannel.appendLine(`Failed to initialize database: ${error}`);
         }
     }
 
-    private parseChatContent(content: string, document: vscode.TextDocument): Conversation | null {
-        // Try different parsing strategies for Cursor chat formats
+    private startPeriodicCheck(): void {
+        this.chatLogger.outputChannel.appendLine(`Starting periodic check with interval: ${this.config.checkInterval}ms`);
+        this.timer = setInterval(() => {
+            this.chatLogger.outputChannel.appendLine('Timer triggered - calling checkForChanges');
+            this.checkForChanges('periodic');
+        }, this.config.checkInterval);
+        this.chatLogger.outputChannel.appendLine('Periodic check timer started');
+    }
+
+    private async checkForChanges(trigger: string): Promise<void> {
+        this.chatLogger.outputChannel.appendLine(`checkForChanges called with trigger: ${trigger}`);
         
-        // Strategy 1: Look for Cursor's specific chat format
-        const cursorChatMatch = this.parseCursorChatFormat(content);
-        if (cursorChatMatch) {
-            return cursorChatMatch;
+        if (this.isCheckingForChanges) {
+            this.chatLogger.outputChannel.appendLine('Already checking for changes, skipping...');
+            return;
+        }
+        
+        if (!this.db) {
+            this.chatLogger.outputChannel.appendLine('Database not initialized, skipping...');
+            return;
         }
 
-        // Strategy 2: Look for markdown conversation format
-        const markdownMatch = this.parseMarkdownConversation(content);
-        if (markdownMatch) {
-            return markdownMatch;
-        }
+        this.isCheckingForChanges = true;
 
-        // Strategy 3: Look for JSON conversation format
-        const jsonMatch = this.parseJsonConversation(content);
-        if (jsonMatch) {
-            return jsonMatch;
-        }
-
-        return null;
-    }
-
-    private parseCursorChatFormat(content: string): Conversation | null {
-        // Cursor typically uses a specific format with user/assistant messages
-        const lines = content.split('\n');
-        const messages: ChatMessage[] = [];
-        let currentRole: 'user' | 'assistant' | 'system' | null = null;
-        let currentContent: string[] = [];
-        let conversationTitle = 'Cursor Chat Conversation';
-
-        for (const line of lines) {
-            // Look for role indicators
-            if (line.startsWith('### User:') || line.startsWith('**User:**') || line.startsWith('👤 User:')) {
-                if (currentRole && currentContent.length > 0) {
-                    messages.push(this.createMessage(currentRole, currentContent.join('\n')));
-                }
-                currentRole = 'user';
-                currentContent = [line.replace(/^### User:|^\*\*User:\*\*|^👤 User:/, '').trim()];
-            } else if (line.startsWith('### Assistant:') || line.startsWith('**Assistant:**') || line.startsWith('🤖 Assistant:')) {
-                if (currentRole && currentContent.length > 0) {
-                    messages.push(this.createMessage(currentRole, currentContent.join('\n')));
-                }
-                currentRole = 'assistant';
-                currentContent = [line.replace(/^### Assistant:|^\*\*Assistant:\*\*|^🤖 Assistant:/, '').trim()];
-            } else if (line.startsWith('### System:') || line.startsWith('**System:**') || line.startsWith('⚙️ System:')) {
-                if (currentRole && currentContent.length > 0) {
-                    messages.push(this.createMessage(currentRole, currentContent.join('\n')));
-                }
-                currentRole = 'system';
-                currentContent = [line.replace(/^### System:|^\*\*System:\*\*|^⚙️ System:/, '').trim()];
-            } else if (line.startsWith('# ')) {
-                // Extract title from markdown header
-                conversationTitle = line.replace('# ', '').trim();
-            } else if (currentRole) {
-                currentContent.push(line);
-            }
-        }
-
-        // Add the last message
-        if (currentRole && currentContent.length > 0) {
-            messages.push(this.createMessage(currentRole, currentContent.join('\n')));
-        }
-
-        if (messages.length === 0) {
-            return null;
-        }
-
-        return this.createConversation(conversationTitle, messages);
-    }
-
-    private parseMarkdownConversation(content: string): Conversation | null {
-        // Parse markdown-style conversation
-        const userMatches = content.match(/^##?\s*User[:\s]*\n([\s\S]*?)(?=^##?\s*Assistant|$)/gm);
-        const assistantMatches = content.match(/^##?\s*Assistant[:\s]*\n([\s\S]*?)(?=^##?\s*User|$)/gm);
-
-        const messages: ChatMessage[] = [];
-        let conversationTitle = 'Markdown Chat Conversation';
-
-        // Extract title
-        const titleMatch = content.match(/^#\s*(.+)$/m);
-        if (titleMatch) {
-            conversationTitle = titleMatch[1].trim();
-        }
-
-        // Process user messages
-        if (userMatches) {
-            userMatches.forEach(match => {
-                const content = match.replace(/^##?\s*User[:\s]*\n/, '').trim();
-                if (content) {
-                    messages.push(this.createMessage('user', content));
-                }
-            });
-        }
-
-        // Process assistant messages
-        if (assistantMatches) {
-            assistantMatches.forEach(match => {
-                const content = match.replace(/^##?\s*Assistant[:\s]*\n/, '').trim();
-                if (content) {
-                    messages.push(this.createMessage('assistant', content));
-                }
-            });
-        }
-
-        if (messages.length === 0) {
-            return null;
-        }
-
-        return this.createConversation(conversationTitle, messages);
-    }
-
-    private parseJsonConversation(content: string): Conversation | null {
         try {
-            const parsed = JSON.parse(content);
+            this.chatLogger.outputChannel.appendLine(`Checking for conversation changes (trigger: ${trigger})`);
             
-            // Check if it's already a conversation object
-            if (parsed.messages && Array.isArray(parsed.messages)) {
-                const messages: ChatMessage[] = parsed.messages.map((msg: any) => 
-                    this.createMessage(msg.role, msg.content)
-                );
-                return this.createConversation(parsed.title || 'JSON Chat Conversation', messages);
-            }
-
-            // Check if it's an array of messages
-            if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].role) {
-                const messages: ChatMessage[] = parsed.map((msg: any) => 
-                    this.createMessage(msg.role, msg.content)
-                );
-                return this.createConversation('JSON Chat Conversation', messages);
+            const conversations = await this.loadConversationsFromDatabase();
+            
+            for (const conversation of conversations) {
+                if (conversation && !this.lastProcessedConversations.has(conversation.id)) {
+                    this.currentConversation = conversation;
+                    this.chatLogger.addConversation(conversation);
+                    this.lastProcessedConversations.add(conversation.id);
+                    
+                    // Auto-save if enabled
+                    if (this.config.autoSave) {
+                        await this.chatLogger.saveConversation(conversation);
+                    }
+                }
             }
         } catch (error) {
-            // Not valid JSON, continue to other parsing strategies
+            this.chatLogger.outputChannel.appendLine(`Error checking for changes: ${error}`);
+        } finally {
+            this.isCheckingForChanges = false;
         }
+    }
 
-        return null;
+    private async loadConversationsFromDatabase(): Promise<Conversation[]> {
+        return new Promise((resolve) => {
+            try {
+                if (!this.db) {
+                    resolve([]);
+                    return;
+                }
+
+                const conversations: Conversation[] = [];
+
+                // Query the cursorDiskKV table for conversation data
+                this.db.all(`
+                    SELECT key, value 
+                    FROM cursorDiskKV 
+                    WHERE key LIKE '%conversation%' 
+                       OR key LIKE '%composer%' 
+                       OR key LIKE '%chat%'
+                       OR key LIKE '%composerData%'
+                    ORDER BY key
+                `, (err, rows: Array<{ key: string; value: string }>) => {
+                    if (err) {
+                        this.chatLogger.outputChannel.appendLine(`Error loading conversations from database: ${err}`);
+                        resolve([]);
+                        return;
+                    }
+
+                    for (const row of rows) {
+                        try {
+                            const data = JSON.parse(row.value);
+                            const conversation = this.parseConversationData(data, row.key);
+                            if (conversation) {
+                                conversations.push(conversation);
+                            }
+                        } catch (error) {
+                            this.chatLogger.outputChannel.appendLine(`Error parsing conversation data from key ${row.key}: ${error}`);
+                        }
+                    }
+
+                    this.chatLogger.outputChannel.appendLine(`Loaded ${conversations.length} conversations from database`);
+                    resolve(conversations);
+                });
+            } catch (error) {
+                this.chatLogger.outputChannel.appendLine(`Error loading conversations from database: ${error}`);
+                resolve([]);
+            }
+        });
+    }
+
+    private parseConversationData(data: any, key: string): Conversation | null {
+        try {
+            const messages: ChatMessage[] = [];
+            let conversationTitle = 'Cursor Chat Conversation';
+            let composerId: string | undefined;
+            let sessionId: string | undefined;
+
+            // Extract conversation data from various possible structures
+            if (data.conversation && Array.isArray(data.conversation)) {
+                for (const message of data.conversation) {
+                    if (message && message.role && message.content) {
+                        messages.push(this.createMessage(message.role, message.content));
+                    }
+                }
+            }
+
+            // Check for composer data
+            if (data.composerId) {
+                composerId = data.composerId;
+                conversationTitle = data.name || `Composer ${composerId}`;
+                
+                if (data.conversation && Array.isArray(data.conversation)) {
+                    for (const message of data.conversation) {
+                        if (message && message.type && message.text) {
+                            const role = this.mapMessageTypeToRole(message.type);
+                            if (role) {
+                                messages.push(this.createMessage(role, message.text));
+                            }
+                        }
+                    }
+                }
+
+                // Process bubble data if available
+                if (data.fullConversationHeadersOnly && Array.isArray(data.fullConversationHeadersOnly)) {
+                    for (const bubble of data.fullConversationHeadersOnly) {
+                        if (bubble && bubble.type && bubble.text) {
+                            const role = this.mapMessageTypeToRole(bubble.type);
+                            if (role) {
+                                messages.push(this.createMessage(role, bubble.text));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check for session data
+            if (data.sessionId) {
+                sessionId = data.sessionId;
+                conversationTitle = data.title || `Session ${sessionId}`;
+                
+                if (data.requests && Array.isArray(data.requests)) {
+                    for (const request of data.requests) {
+                        if (request.message && request.message.text) {
+                            messages.push(this.createMessage('user', request.message.text));
+                        }
+
+                        if (request.response && Array.isArray(request.response)) {
+                            let assistantContent = '';
+                            for (const response of request.response) {
+                                if (response.value) {
+                                    assistantContent += response.value;
+                                }
+                            }
+                            if (assistantContent.trim()) {
+                                messages.push(this.createMessage('assistant', assistantContent));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (messages.length === 0) {
+                return null;
+            }
+
+            return this.createConversation(conversationTitle, messages, data, key);
+        } catch (error) {
+            this.chatLogger.outputChannel.appendLine(`Error parsing conversation data: ${error}`);
+            return null;
+        }
+    }
+
+    private mapMessageTypeToRole(type: number): 'user' | 'assistant' | 'system' | null {
+        // Cursor message type mapping
+        // Type 1 is typically user, Type 2 is typically assistant
+        switch (type) {
+            case 1:
+                return 'user';
+            case 2:
+                return 'assistant';
+            case 0:
+                return 'system';
+            default:
+                return null;
+        }
     }
 
     private createMessage(role: 'user' | 'assistant' | 'system', content: string): ChatMessage {
@@ -315,7 +335,7 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
         return { filteredContent, metadata };
     }
 
-    private createConversation(title: string, messages: ChatMessage[]): Conversation {
+    private createConversation(title: string, messages: ChatMessage[], data?: any, key?: string): Conversation {
         const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const now = new Date();
         
@@ -327,8 +347,8 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
 
         return {
             id: conversationId,
-            createdAt: now,
-            updatedAt: now,
+            createdAt: data?.createdAt ? new Date(data.createdAt) : now,
+            updatedAt: data?.lastUpdatedAt ? new Date(data.lastUpdatedAt) : now,
             title,
             messages,
             metadata: {
@@ -337,12 +357,30 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
                 totalMessages: messages.length,
                 userMessages,
                 assistantMessages,
-                totalTokensEstimated
+                totalTokensEstimated,
+                composerId: data?.composerId,
+                sessionId: data?.sessionId,
+                source: 'cursor-database',
+                filePath: key
             }
         };
     }
 
     public dispose(): void {
+        if (this.db) {
+            this.db.close((err) => {
+                if (err) {
+                    this.chatLogger.outputChannel.appendLine(`Error closing database: ${err}`);
+                }
+            });
+            this.db = null;
+        }
+
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
+
         this.disposables.forEach(disposable => disposable.dispose());
         this.disposables = [];
     }

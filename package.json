@@ -54,6 +54,14 @@
             "relative"
           ],
           "description": "Timestamp format for conversation entries"
+        },
+        "chatlogger.checkInterval": {
+          "order": 5,
+          "type": "number",
+          "default": 30000,
+          "minimum": 5000,
+          "maximum": 300000,
+          "description": "Interval in milliseconds to check for new conversations (5-300 seconds)"
         }
       }
     },
@@ -77,6 +85,11 @@
         "command": "chatlogger.listVirtualDocs",
         "title": "🗂️ List Virtual Docs",
         "category": "ChatLogger"
+      },
+      {
+        "command": "chatlogger.checkConversations",
+        "title": "🔍 Check Conversations",
+        "category": "ChatLogger"
       }
     ],
     "views": {
@@ -98,11 +111,16 @@
   "devDependencies": {
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.17.9",
+    "@types/sqlite3": "^3.1.11",
     "@types/vscode": "^1.93.1",
     "@vscode/vsce": "^3.2.1",
     "typescript": "^5.7.3"
   },
   "dependencies": {
-    "fs-extra": "^11.2.0"
+    "fs-extra": "^11.2.0",
+    "sqlite3": "^5.1.7"
+  },
+  "overrides": {
+    "undici": "6.21.3"
   }
 }

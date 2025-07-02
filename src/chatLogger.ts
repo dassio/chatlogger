@@ -29,6 +29,10 @@ export interface Conversation {
         userMessages: number;
         assistantMessages: number;
         totalTokensEstimated: number;
+        composerId?: string;
+        sessionId?: string;
+        source?: string;
+        filePath?: string;
     };
 }
 
@@ -51,7 +55,8 @@ export class ChatLogger {
             autoSave: config.get('autoSave.enabled', true),
             ignoreCodeOutput: config.get('ignoreCodeOutput', true),
             outputFormat: config.get('outputFormat', 'markdown'),
-            timestampFormat: config.get('timestampFormat', 'ISO')
+            timestampFormat: config.get('timestampFormat', 'ISO'),
+            checkInterval: config.get('checkInterval', 30000)
         };
     }
 
