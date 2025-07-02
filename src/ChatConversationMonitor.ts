@@ -5,7 +5,7 @@ import * as os from 'os';
 import { Database } from 'sqlite3';
 import { ChatLogger, Conversation, ChatMessage } from './chatLogger';
 
-export class VirtualDocumentMonitor implements vscode.Disposable {
+export class ChatConversationMonitor implements vscode.Disposable {
     private chatLogger: ChatLogger;
     private disposables: vscode.Disposable[] = [];
     private config: any;

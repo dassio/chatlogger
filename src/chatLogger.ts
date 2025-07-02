@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs-extra';
-import { VirtualDocumentMonitor } from './virtualDocumentMonitor';
+import { ChatConversationMonitor } from './ChatConversationMonitor';
 
 export interface ChatMessage {
     id: string;
@@ -43,7 +43,7 @@ export class ChatLogger {
     private context: vscode.ExtensionContext;
     public outputChannel: vscode.OutputChannel;
     private config: any;
-    private monitor: VirtualDocumentMonitor | undefined;
+    private monitor: ChatConversationMonitor | undefined;
 
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
@@ -66,7 +66,7 @@ export class ChatLogger {
         this.loadConfiguration();
     }
 
-    public setMonitor(monitor: VirtualDocumentMonitor) {
+    public setMonitor(monitor: ChatConversationMonitor) {
         this.monitor = monitor;
     }
 

@@ -1,17 +1,17 @@
 import * as vscode from 'vscode';
 import { ChatLogger } from './chatLogger';
-import { VirtualDocumentMonitor } from './virtualDocumentMonitor';
+import { ChatConversationMonitor } from './ChatConversationMonitor';
 
 let chatLogger: ChatLogger;
-let virtualDocumentMonitor: VirtualDocumentMonitor;
+let chatConversationMonitor: ChatConversationMonitor;
 
 export async function activate(context: vscode.ExtensionContext) {
     chatLogger = new ChatLogger(context);
 
-    virtualDocumentMonitor = new VirtualDocumentMonitor(chatLogger);
-    chatLogger.setMonitor(virtualDocumentMonitor);
+    chatConversationMonitor = new ChatConversationMonitor(chatLogger);
+    chatLogger.setMonitor(chatConversationMonitor);
     await chatLogger.loadSavedConversations();
-    virtualDocumentMonitor.start();
+    chatConversationMonitor.start();
 
     chatLogger.outputChannel.appendLine('ChatLogger extension activated successfully!');
 
@@ -68,12 +68,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Command to manually trigger conversation check
     const checkConversationsCommand = vscode.commands.registerCommand('chatlogger.checkConversations', async () => {
-        if (virtualDocumentMonitor) {
+        if (chatConversationMonitor) {
             chatLogger.outputChannel.appendLine('Manually triggering conversation check...');
-            await virtualDocumentMonitor['checkForChanges']('manual');
+            await chatConversationMonitor['checkForChanges']('manual');
             chatLogger.outputChannel.show();
         } else {
-            vscode.window.showErrorMessage('VirtualDocumentMonitor not initialized');
+            vscode.window.showErrorMessage('ChatConversationMonitor not initialized');
         }
     });
 
@@ -88,7 +88,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const configChangeListener = vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('chatlogger')) {
             chatLogger.updateConfiguration();
-            virtualDocumentMonitor.updateConfiguration();
+            chatConversationMonitor.updateConfiguration();
         }
     });
 
@@ -97,7 +97,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     console.log('ChatLogger extension is now deactivated!');
-    if (virtualDocumentMonitor) {
-        virtualDocumentMonitor.dispose();
+    if (chatConversationMonitor) {
+        chatConversationMonitor.dispose();
     }
 } 
