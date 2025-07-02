@@ -5,8 +5,6 @@ node_modules/
 dist/
 
 
-# VS Code settings
-.vscode/
 
 # OS generated files
 .DS_Store
