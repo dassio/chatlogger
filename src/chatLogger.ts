@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs-extra';
+import { VirtualDocumentMonitor } from './virtualDocumentMonitor';
 
 export interface ChatMessage {
     id: string;
+    bubbleId?: string;
     timestamp: Date;
     role: 'user' | 'assistant' | 'system';
     content: string;
@@ -41,12 +43,12 @@ export class ChatLogger {
     private context: vscode.ExtensionContext;
     public outputChannel: vscode.OutputChannel;
     private config: any;
+    private monitor: VirtualDocumentMonitor | undefined;
 
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
         this.outputChannel = vscode.window.createOutputChannel('ChatLogger');
         this.loadConfiguration();
-        this.loadSavedConversations();
     }
 
     private loadConfiguration() {
@@ -64,31 +66,8 @@ export class ChatLogger {
         this.loadConfiguration();
     }
 
-    private async loadSavedConversations() {
-        try {
-            const storagePath = this.getStoragePath();
-            await fs.ensureDir(storagePath);
-            const files = await fs.readdir(storagePath);
-            for (const file of files) {
-                if (file.endsWith('.json')) {
-                    const filePath = path.join(storagePath, file);
-                    const content = await fs.readFile(filePath, 'utf8');
-                    const conversation: Conversation = JSON.parse(content);
-                    
-                    // Convert string dates back to Date objects
-                    conversation.createdAt = new Date(conversation.createdAt);
-                    conversation.updatedAt = new Date(conversation.updatedAt);
-                    conversation.messages.forEach(msg => {
-                        msg.timestamp = new Date(msg.timestamp);
-                    });
-                    
-                    this.conversations.set(conversation.id, conversation);
-                }
-            }
-            this.outputChannel.appendLine(`Loaded ${this.conversations.size} saved conversations`);
-        } catch (error) {
-            this.outputChannel.appendLine(`Error loading conversations: ${error}`);
-        }
+    public setMonitor(monitor: VirtualDocumentMonitor) {
+        this.monitor = monitor;
     }
 
     public async saveCurrentConversation(): Promise<void> {
@@ -101,14 +80,57 @@ export class ChatLogger {
     }
 
     public async saveConversation(conversation: Conversation): Promise<void> {
+        function toLocalString(date: Date | string): string {
+            return new Date(date).toLocaleString();
+        }
         try {
             const storagePath = this.getStoragePath();
             await fs.ensureDir(storagePath);
-            
-            const fileName = `${conversation.id}.json`;
+
+            // Use composerId as the file name
+            const composerId = conversation.metadata.composerId;
+            if (!composerId) {
+                throw new Error('Cannot save conversation without composerId');
+            }
+            const fileName = `${composerId}.json`;
             const filePath = path.join(storagePath, fileName);
-            
-            await fs.writeFile(filePath, JSON.stringify(conversation, null, 2));
+
+            let mergedConversation = conversation;
+            if (await fs.pathExists(filePath)) {
+                // Load existing conversation and merge messages
+                const existingContent = await fs.readFile(filePath, 'utf8');
+                const existingConversation: Conversation = JSON.parse(existingContent);
+                const existingMessages = existingConversation.messages || [];
+                const newMessages = conversation.messages || [];
+                // Merge messages by bubbleId (or id if bubbleId is missing)
+                const allMessages = [...existingMessages, ...newMessages];
+                const seen = new Set<string>();
+                const mergedMessages = allMessages.filter(msg => {
+                    const key = msg.bubbleId || msg.id;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
+                mergedConversation = {
+                    ...conversation,
+                    messages: mergedMessages,
+                    createdAt: existingConversation.createdAt ? new Date(existingConversation.createdAt) : new Date(conversation.createdAt),
+                    updatedAt: new Date(),
+                };
+            }
+
+            // Convert all date fields to local time strings
+            const conversationToSave = {
+                ...mergedConversation,
+                createdAt: toLocalString(mergedConversation.createdAt),
+                updatedAt: toLocalString(mergedConversation.updatedAt),
+                messages: mergedConversation.messages.map(msg => ({
+                    ...msg,
+                    timestamp: toLocalString(msg.timestamp)
+                }))
+            };
+
+            await fs.writeFile(filePath, JSON.stringify(conversationToSave, null, 2));
             this.outputChannel.appendLine(`Saved conversation: ${conversation.title}`);
         } catch (error) {
             this.outputChannel.appendLine(`Error saving conversation: ${error}`);
@@ -277,5 +299,40 @@ export class ChatLogger {
 
     public getConversation(id: string): Conversation | undefined {
         return this.conversations.get(id);
+    }
+
+    public async loadSavedConversations() {
+        try {
+            const storagePath = this.getStoragePath();
+            await fs.ensureDir(storagePath);
+            const files = await fs.readdir(storagePath);
+            for (const file of files) {
+                if (file.endsWith('.json')) {
+                    const filePath = path.join(storagePath, file);
+                    const content = await fs.readFile(filePath, 'utf8');
+                    const conversation: Conversation = JSON.parse(content);
+                    
+                    // Convert string dates back to Date objects
+                    conversation.createdAt = new Date(conversation.createdAt);
+                    conversation.updatedAt = new Date(conversation.updatedAt);
+                    conversation.messages.forEach(msg => {
+                        msg.timestamp = new Date(msg.timestamp);
+                    });
+                    
+                    // Mark composerId and bubbleIds as processed in the monitor
+                    if (conversation.metadata.composerId && this.monitor) {
+                        const bubbleIds = conversation.messages
+                            .map(msg => msg.bubbleId)
+                            .filter((id): id is string => Boolean(id));
+                        this.monitor.markComposerIdProcessed(conversation.metadata.composerId, bubbleIds);
+                    }
+
+                    this.conversations.set(conversation.id, conversation);
+                }
+            }
+            this.outputChannel.appendLine(`Loaded ${this.conversations.size} saved conversations`);
+        } catch (error) {
+            this.outputChannel.appendLine(`Error loading conversations: ${error}`);
+        }
     }
 } 

@@ -8,13 +8,12 @@ import { ChatLogger, Conversation, ChatMessage } from './chatLogger';
 export class VirtualDocumentMonitor implements vscode.Disposable {
     private chatLogger: ChatLogger;
     private disposables: vscode.Disposable[] = [];
-    private currentConversation: Conversation | null = null;
     private config: any;
     private timer: NodeJS.Timeout | null = null;
     private isCheckingForChanges = false;
-    private lastProcessedConversations = new Set<string>();
     private db: Database | null = null;
-
+    private lastProcessedComposerIds = new Map<string, Set<string>>();
+    private currentLogLevel: 'debug' | 'info' | 'warn' | 'error' = 'info';
 
     constructor(chatLogger: ChatLogger) {
         this.chatLogger = chatLogger;
@@ -35,17 +34,14 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
     }
 
     public start(): void {
-        this.chatLogger.outputChannel.appendLine('VirtualDocumentMonitor.start() called');
-        
         if (!this.config.autoSave) {
-            this.chatLogger.outputChannel.appendLine('Auto-save is disabled, not starting monitor');
+            this.log('info', 'Auto-save is disabled, not starting monitor');
             return;
         }
 
-        this.chatLogger.outputChannel.appendLine('Auto-save is enabled, initializing...');
         this.initializeDatabase();
         this.startPeriodicCheck();
-        this.chatLogger.outputChannel.appendLine('VirtualDocumentMonitor started successfully');
+        this.log('info', 'VirtualDocumentMonitor started and monitoring Cursor conversations.');
     }
 
     private getCursorStoragePath(): string {
@@ -59,77 +55,85 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
         return path.join(cursorStoragePath, 'state.vscdb');
     }
 
+    private getCurrentWorkspacePath(): string | null {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            return workspaceFolders[0].uri.fsPath;
+        }
+        return null;
+    }
+
+    private isSameWorkspace(conversationWorkspacePath: string, currentWorkspacePath: string): boolean {
+        // Normalize paths for comparison
+        const normalizedConversationPath = path.normalize(conversationWorkspacePath);
+        const normalizedCurrentPath = path.normalize(currentWorkspacePath);
+        
+        // Check if conversation workspace is the same as current workspace
+        return normalizedConversationPath === normalizedCurrentPath;
+    }
+
     private initializeDatabase(): void {
         try {
             const dbPath = this.getCursorDatabasePath();
-            
             if (!fs.existsSync(dbPath)) {
-                this.chatLogger.outputChannel.appendLine(`Cursor database does not exist: ${dbPath}`);
+                this.log('info', `Cursor database does not exist: ${dbPath}`);
                 return;
             }
-
             this.db = new Database(dbPath, (err) => {
                 if (err) {
-                    this.chatLogger.outputChannel.appendLine(`Failed to initialize database: ${err}`);
+                    this.log('error', `Failed to initialize database: ${err}`);
                 } else {
-                    this.chatLogger.outputChannel.appendLine(`Database connection established: ${dbPath}`);
+                    this.log('info', `Database connection established: ${dbPath}`);
                 }
             });
         } catch (error) {
-            this.chatLogger.outputChannel.appendLine(`Failed to initialize database: ${error}`);
+            this.log('error', `Failed to initialize database: ${error}`);
         }
     }
 
     private startPeriodicCheck(): void {
-        this.chatLogger.outputChannel.appendLine(`Starting periodic check with interval: ${this.config.checkInterval}ms`);
+        this.log('info', `Starting periodic check (interval: ${this.config.checkInterval}ms)`);
         this.timer = setInterval(() => {
-            this.chatLogger.outputChannel.appendLine('Timer triggered - calling checkForChanges');
+            this.log('info', 'Timer triggered - checking for new conversations...');
             this.checkForChanges('periodic');
         }, this.config.checkInterval);
-        this.chatLogger.outputChannel.appendLine('Periodic check timer started');
+        // Only log once
     }
 
-    private async checkForChanges(trigger: string): Promise<void> {
-        this.chatLogger.outputChannel.appendLine(`checkForChanges called with trigger: ${trigger}`);
-        
+    private async checkForChanges(trigger: string): Promise<void> {        
         if (this.isCheckingForChanges) {
-            this.chatLogger.outputChannel.appendLine('Already checking for changes, skipping...');
+            this.log('info', 'Already checking for changes, skipping...');
             return;
         }
         
         if (!this.db) {
-            this.chatLogger.outputChannel.appendLine('Database not initialized, skipping...');
+            this.log('info', 'Database not initialized, skipping...');
             return;
         }
 
         this.isCheckingForChanges = true;
 
-        try {
-            this.chatLogger.outputChannel.appendLine(`Checking for conversation changes (trigger: ${trigger})`);
-            
+        try {            
             const conversations = await this.loadConversationsFromDatabase();
             
             for (const conversation of conversations) {
-                if (conversation && !this.lastProcessedConversations.has(conversation.id)) {
-                    this.currentConversation = conversation;
-                    this.chatLogger.addConversation(conversation);
-                    this.lastProcessedConversations.add(conversation.id);
-                    
-                    // Auto-save if enabled
-                    if (this.config.autoSave) {
-                        await this.chatLogger.saveConversation(conversation);
-                    }
+                if (!conversation) continue;
+                this.chatLogger.addConversation(conversation);
+                
+                // Auto-save if enabled
+                if (this.config.autoSave) {
+                    await this.chatLogger.saveConversation(conversation);
                 }
             }
         } catch (error) {
-            this.chatLogger.outputChannel.appendLine(`Error checking for changes: ${error}`);
+            this.log('error', `Error checking for changes: ${error}`);
         } finally {
             this.isCheckingForChanges = false;
         }
     }
 
     private async loadConversationsFromDatabase(): Promise<Conversation[]> {
-        return new Promise((resolve) => {
+        return new Promise(async (resolve) => {
             try {
                 if (!this.db) {
                     resolve([]);
@@ -142,14 +146,11 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
                 this.db.all(`
                     SELECT key, value 
                     FROM cursorDiskKV 
-                    WHERE key LIKE '%conversation%' 
-                       OR key LIKE '%composer%' 
-                       OR key LIKE '%chat%'
-                       OR key LIKE '%composerData%'
+                    WHERE key LIKE '%composer%' 
                     ORDER BY key
-                `, (err, rows: Array<{ key: string; value: string }>) => {
+                `, async (err, rows: Array<{ key: string; value: string }>) => {
                     if (err) {
-                        this.chatLogger.outputChannel.appendLine(`Error loading conversations from database: ${err}`);
+                        this.log('error', `Error loading conversations from database: ${err}`);
                         resolve([]);
                         return;
                     }
@@ -157,93 +158,108 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
                     for (const row of rows) {
                         try {
                             const data = JSON.parse(row.value);
-                            const conversation = this.parseConversationData(data, row.key);
+                            const conversation = await this.parseConversationData(data, row.key);
                             if (conversation) {
                                 conversations.push(conversation);
                             }
                         } catch (error) {
-                            this.chatLogger.outputChannel.appendLine(`Error parsing conversation data from key ${row.key}: ${error}`);
+                            this.log('error', `Error parsing conversation data from key ${row.key}: ${error}`);
                         }
                     }
 
-                    this.chatLogger.outputChannel.appendLine(`Loaded ${conversations.length} conversations from database`);
                     resolve(conversations);
                 });
             } catch (error) {
-                this.chatLogger.outputChannel.appendLine(`Error loading conversations from database: ${error}`);
+                this.log('error', `Error loading conversations from database: ${error}`);
                 resolve([]);
             }
         });
     }
 
-    private parseConversationData(data: any, key: string): Conversation | null {
+    private async parseConversationData(data: any, key: string): Promise<Conversation | null> {
         try {
-            const messages: ChatMessage[] = [];
             let conversationTitle = 'Cursor Chat Conversation';
             let composerId: string | undefined;
             let sessionId: string | undefined;
+            let workspacePath: string | undefined;
 
-            // Extract conversation data from various possible structures
-            if (data.conversation && Array.isArray(data.conversation)) {
-                for (const message of data.conversation) {
-                    if (message && message.role && message.content) {
-                        messages.push(this.createMessage(message.role, message.content));
+            composerId = this.extractComposerIdFromKey(key);
+            if (!composerId) {
+                this.log('info', 'No composer ID found in key, cannot extract messages');
+                return null;
+            }
+
+            // Get all bubble IDs from the composer data
+            const bubbleIds = this.extractBubbleIdsFromComposerData(data);
+            if (bubbleIds.length === 0) {
+                this.log('debug', 'No bubble IDs found in composer data for message extraction');
+                return null;
+            }
+
+            // Deduplication: skip if all bubbleIds are already processed
+            const processedSet = this.lastProcessedComposerIds.get(composerId) || new Set();
+            const newBubbleIds = bubbleIds.filter(bid => !processedSet.has(bid));
+            if (newBubbleIds.length === 0) {
+                this.log('debug', `[ChatLogger] Skipping already processed composer and bubbleIds in parseConversationData: ${composerId}`);
+                return null;
+            }
+
+            // Get current workspace path for filtering
+            const currentWorkspacePath = this.getCurrentWorkspacePath();
+            if (!currentWorkspacePath) {
+                this.log('debug', 'No workspace open, skipping conversation');
+                return null;
+            }
+
+            // Extract workspace information from the data structure
+            workspacePath = await this.extractWorkspacePathFromData(data, key);
+            
+            if (!workspacePath) {
+                this.log('debug', 'No workspace path found in conversation data, skipping.');
+                return null;
+            }
+
+            // Check if this conversation belongs to the current workspace
+            if (!this.isSameWorkspace(workspacePath, currentWorkspacePath)) {
+                this.log('debug', `Skipping conversation: workspace ${workspacePath} not matching current workspace ${currentWorkspacePath}`);
+                return null;
+            }
+            
+            this.log('debug', `Accepted conversation: workspace ${workspacePath} matches current workspace ${currentWorkspacePath}`);
+
+            // --- NEW LOGIC: Build messages from new bubble data only ---
+            const messages: ChatMessage[] = [];
+            for (const bubbleId of newBubbleIds) {
+                const bubbleKey = `bubbleId:${composerId}:${bubbleId}`;
+                const bubbleData = await this.getBubbleData(bubbleKey);
+                if (bubbleData && bubbleData.type && (bubbleData.text || bubbleData.content)) {
+                    const role = this.mapMessageTypeToRole(bubbleData.type);
+                    if (role) {
+                        const text = bubbleData.text || bubbleData.content;
+                        const timestamp = new Date();
+                        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        const { filteredContent, metadata } = this.filterMessageContent(text, role);
+                        messages.push({
+                            id: messageId,
+                            bubbleId,
+                            timestamp,
+                            role,
+                            content: text,
+                            filteredContent,
+                            metadata
+                        });
                     }
                 }
             }
 
-            // Check for composer data
-            if (data.composerId) {
-                composerId = data.composerId;
-                conversationTitle = data.name || `Composer ${composerId}`;
-                
-                if (data.conversation && Array.isArray(data.conversation)) {
-                    for (const message of data.conversation) {
-                        if (message && message.type && message.text) {
-                            const role = this.mapMessageTypeToRole(message.type);
-                            if (role) {
-                                messages.push(this.createMessage(role, message.text));
-                            }
-                        }
-                    }
+            // Mark these bubbleIds as processed for this composerId
+            if (newBubbleIds.length > 0) {
+                if (!this.lastProcessedComposerIds.has(composerId)) {
+                    this.lastProcessedComposerIds.set(composerId, new Set());
                 }
-
-                // Process bubble data if available
-                if (data.fullConversationHeadersOnly && Array.isArray(data.fullConversationHeadersOnly)) {
-                    for (const bubble of data.fullConversationHeadersOnly) {
-                        if (bubble && bubble.type && bubble.text) {
-                            const role = this.mapMessageTypeToRole(bubble.type);
-                            if (role) {
-                                messages.push(this.createMessage(role, bubble.text));
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Check for session data
-            if (data.sessionId) {
-                sessionId = data.sessionId;
-                conversationTitle = data.title || `Session ${sessionId}`;
-                
-                if (data.requests && Array.isArray(data.requests)) {
-                    for (const request of data.requests) {
-                        if (request.message && request.message.text) {
-                            messages.push(this.createMessage('user', request.message.text));
-                        }
-
-                        if (request.response && Array.isArray(request.response)) {
-                            let assistantContent = '';
-                            for (const response of request.response) {
-                                if (response.value) {
-                                    assistantContent += response.value;
-                                }
-                            }
-                            if (assistantContent.trim()) {
-                                messages.push(this.createMessage('assistant', assistantContent));
-                            }
-                        }
-                    }
+                const set = this.lastProcessedComposerIds.get(composerId)!;
+                for (const bubbleId of newBubbleIds) {
+                    set.add(bubbleId);
                 }
             }
 
@@ -251,10 +267,206 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
                 return null;
             }
 
-            return this.createConversation(conversationTitle, messages, data, key);
+            // Use the composer name or fallback title
+            if (data.composerId) {
+                conversationTitle = data.name || `Composer ${data.composerId}`;
+            } else if (data.sessionId) {
+                sessionId = data.sessionId;
+                conversationTitle = data.title || `Session ${sessionId}`;
+            }
+
+            return this.createConversation(conversationTitle, messages, data, key, workspacePath);
         } catch (error) {
-            this.chatLogger.outputChannel.appendLine(`Error parsing conversation data: ${error}`);
+            this.log('debug', `Failed parsing conversation data: ${error}`);
             return null;
+        }
+    }
+
+    private async extractWorkspacePathFromData(data: any, key: string): Promise<string | undefined> {
+        try {
+            // Extract composer ID from the key
+            const composerId = this.extractComposerIdFromKey(key);
+            if (!composerId) {
+                this.log('info', 'No composer ID found in key, cannot extract workspace path');
+                return undefined;
+            }
+
+            // Get all bubble IDs from the composer data
+            const bubbleIds = this.extractBubbleIdsFromComposerData(data);
+            if (bubbleIds.length === 0) {
+                this.log('debug', 'No bubble IDs found in composer data');
+                return undefined;
+            }
+
+            // Query messageRequestContext for each bubble
+            const messageRequestContexts = await this.getAllMessageRequestContexts(composerId, bubbleIds);
+            
+            // Check each messageRequestContext for projectLayouts
+            for (const contextData of messageRequestContexts) {
+                if (contextData.projectLayouts && Array.isArray(contextData.projectLayouts)) {
+                    for (const layout of contextData.projectLayouts) {
+                        try {
+                            const layoutData = JSON.parse(layout);
+                            if (layoutData.rootPath) {
+                                // Found workspace name, now look up the actual path
+                                const workspacePath = this.getWorkspacePathFromName(layoutData.rootPath);
+                                if (workspacePath) {
+                                    this.log('debug', `Found workspace path: ${workspacePath} from project layout: ${layoutData.rootPath}`);
+                                    return workspacePath;
+                                }
+                            }
+                        } catch (parseError) {
+                            this.log('error', `Error parsing project layout: ${parseError}`);
+                        }
+                    }
+                }
+            }
+
+            this.log('info', 'No workspace path found in any messageRequestContext');
+            return undefined;
+        } catch (error) {
+            return undefined;
+        }
+    }
+
+    private extractComposerIdFromKey(key: string): string | undefined {
+        // Only extract from keys like "composerData:{composerId}"
+        const match = key.match(/^composerData:([^:]+)/);
+        return match ? match[1] : undefined;
+    }
+
+    private async getBubbleData(bubbleKey: string): Promise<any | undefined> {
+        if (!this.db) {
+            return undefined;
+        }
+
+        return new Promise((resolve) => {
+            this.db!.get(
+                'SELECT value FROM cursorDiskKV WHERE key = ?',
+                [bubbleKey],
+                (err, row: { value: string } | undefined) => {
+                    if (err) {
+                        this.log('error', `Error getting bubble data: ${err}`);
+                        resolve(undefined);
+                        return;
+                    }
+                    
+                    if (row) {
+                        try {
+                            const data = JSON.parse(row.value);
+                            resolve(data);
+                        } catch (parseError) {
+                            this.log('error', `Error parsing bubble data: ${parseError}`);
+                            resolve(undefined);
+                        }
+                    } else {
+                        resolve(undefined);
+                    }
+                }
+            );
+        });
+    }
+
+    private extractBubbleIdsFromComposerData(data: any): string[] {
+        const bubbleIds: string[] = [];
+        
+        if (data.fullConversationHeadersOnly && Array.isArray(data.fullConversationHeadersOnly)) {
+            for (const bubble of data.fullConversationHeadersOnly) {
+                if (bubble.bubbleId) {
+                    bubbleIds.push(bubble.bubbleId);
+                }
+            }
+        }
+        
+        return bubbleIds;
+    }
+
+    private async getAllMessageRequestContexts(composerId: string, bubbleIds: string[]): Promise<any[]> {
+        if (!this.db) {
+            return [];
+        }
+
+        return new Promise((resolve) => {
+            const contexts: any[] = [];
+            let completedQueries = 0;
+            const totalQueries = bubbleIds.length;
+
+            if (totalQueries === 0) {
+                resolve(contexts);
+                return;
+            }
+
+            // Query messageRequestContext for each bubble ID
+            for (const bubbleId of bubbleIds) {
+                const key = `messageRequestContext:${composerId}:${bubbleId}`;
+                this.db!.get(
+                    'SELECT key, value FROM cursorDiskKV WHERE key = ?',
+                    [key],
+                    (err, row: { key: string; value: string } | undefined) => {
+                        completedQueries++;
+                        
+                        if (err) {
+                            this.log('error', `Error getting messageRequestContext for bubble ${bubbleId}: ${err}`);
+                        } else if (row) {
+                            try {
+                                const data = JSON.parse(row.value);
+                                contexts.push(data);
+                            } catch (parseError) {
+                                this.log('error', `Error parsing messageRequestContext data for bubble ${bubbleId}: ${parseError}`);
+                            }
+                        }
+
+                        // Resolve when all queries are complete
+                        if (completedQueries === totalQueries) {
+                            this.log('debug', `Found ${contexts.length} messageRequestContext entries for ${totalQueries} bubbles`);
+                            resolve(contexts);
+                        }
+                    }
+                );
+            }
+        });
+    }
+
+    private getWorkspacePathFromName(workspaceName: string): string | undefined {
+        try {
+            // Load storage.json to get workspace path mapping
+            const storagePath = this.getCursorStoragePath();
+            const storageFile = path.join(storagePath, 'storage.json');
+            
+            if (!fs.existsSync(storageFile)) {
+                this.log('info', `Storage file not found: ${storageFile}`);
+                return undefined;
+            }
+
+            const storageContent = fs.readFileSync(storageFile, 'utf8');
+            const storage = JSON.parse(storageContent);
+
+            // Only check backupWorkspaces.folders
+            if (storage.backupWorkspaces && storage.backupWorkspaces.folders) {
+                for (const folder of storage.backupWorkspaces.folders) {
+                    if (folder.folderUri) {
+                        // Extract the path from folderUri
+                        const uriMatch = folder.folderUri.match(/file:\/\/\/(.+)/);
+                        if (uriMatch) {
+                            const decodedPath = decodeURIComponent(uriMatch[1]);
+                            const pathParts = decodedPath.split('/');
+                            const nameFromPath = pathParts[pathParts.length - 1];
+                            
+                            // Check if the last part matches the workspace name
+                            if (nameFromPath === workspaceName) {
+                                this.log('debug', `Matched workspace name "${workspaceName}" with path "${decodedPath}"`);
+                                return decodedPath;
+                            }
+                        }
+                    }
+                }
+            }
+
+            this.log('info', `No matching workspace found for name: ${workspaceName}`);
+            return undefined;
+        } catch (error) {
+            this.log('error', `Error getting workspace path from name: ${error}`);
+            return undefined;
         }
     }
 
@@ -271,22 +483,6 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
             default:
                 return null;
         }
-    }
-
-    private createMessage(role: 'user' | 'assistant' | 'system', content: string): ChatMessage {
-        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
-        // Filter content if needed
-        const { filteredContent, metadata } = this.filterMessageContent(content, role);
-        
-        return {
-            id: messageId,
-            timestamp: new Date(),
-            role,
-            content,
-            filteredContent,
-            metadata
-        };
     }
 
     private filterMessageContent(content: string, role: string): { filteredContent?: string; metadata: any } {
@@ -335,7 +531,7 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
         return { filteredContent, metadata };
     }
 
-    private createConversation(title: string, messages: ChatMessage[], data?: any, key?: string): Conversation {
+    private createConversation(title: string, messages: ChatMessage[], data?: any, key?: string, workspacePath?: string): Conversation {
         const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const now = new Date();
         
@@ -352,7 +548,7 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
             title,
             messages,
             metadata: {
-                workspacePath: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+                workspacePath: workspacePath || undefined,
                 fileContext: [],
                 totalMessages: messages.length,
                 userMessages,
@@ -370,7 +566,7 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
         if (this.db) {
             this.db.close((err) => {
                 if (err) {
-                    this.chatLogger.outputChannel.appendLine(`Error closing database: ${err}`);
+                    this.log('error', `Error closing database: ${err}`);
                 }
             });
             this.db = null;
@@ -383,5 +579,22 @@ export class VirtualDocumentMonitor implements vscode.Disposable {
 
         this.disposables.forEach(disposable => disposable.dispose());
         this.disposables = [];
+    }
+
+    private log(level: 'debug' | 'info' | 'warn' | 'error', message: string) {
+        const levels = { debug: 0, info: 1, warn: 2, error: 3 };
+        if (levels[level] >= levels[this.currentLogLevel]) {
+            this.chatLogger.outputChannel.appendLine(`[${level.toUpperCase()}] ${message}`);
+        }
+    }
+
+    public markComposerIdProcessed(composerId: string, bubbleIds: string[]) {
+        if (!this.lastProcessedComposerIds.has(composerId)) {
+            this.lastProcessedComposerIds.set(composerId, new Set());
+        }
+        const set = this.lastProcessedComposerIds.get(composerId)!;
+        for (const bubbleId of bubbleIds) {
+            set.add(bubbleId);
+        }
     }
 } 

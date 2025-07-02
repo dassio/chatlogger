@@ -5,21 +5,16 @@ import { VirtualDocumentMonitor } from './virtualDocumentMonitor';
 let chatLogger: ChatLogger;
 let virtualDocumentMonitor: VirtualDocumentMonitor;
 
-export function activate(context: vscode.ExtensionContext) {
-    console.log('ChatLogger activated!');
-    
-    // Initialize the chat logger
+export async function activate(context: vscode.ExtensionContext) {
     chatLogger = new ChatLogger(context);
-    
-    // Initialize the virtual document monitor
+
     virtualDocumentMonitor = new VirtualDocumentMonitor(chatLogger);
+    chatLogger.setMonitor(virtualDocumentMonitor);
+    await chatLogger.loadSavedConversations();
     virtualDocumentMonitor.start();
-    
-    // Log activation
+
     chatLogger.outputChannel.appendLine('ChatLogger extension activated successfully!');
-    chatLogger.outputChannel.appendLine('VirtualDocumentMonitor started - monitoring Cursor conversations...');
-    
-    // Register commands
+
     const saveConversationCommand = vscode.commands.registerCommand('chatlogger.saveConversation', async () => {
         try {
             await chatLogger.saveCurrentConversation();
@@ -28,7 +23,7 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage(`Failed to save conversation: ${error}`);
         }
     });
-    
+
     const viewHistoryCommand = vscode.commands.registerCommand('chatlogger.viewHistory', async () => {
         try {
             await chatLogger.showHistoryView();
@@ -36,14 +31,14 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage(`Failed to view history: ${error}`);
         }
     });
-    
+
     const clearHistoryCommand = vscode.commands.registerCommand('chatlogger.clearHistory', async () => {
         const result = await vscode.window.showWarningMessage(
             'Are you sure you want to clear all chat history? This action cannot be undone.',
             { modal: true },
             'Yes, Clear All'
         );
-        
+
         if (result === 'Yes, Clear All') {
             try {
                 await chatLogger.clearHistory();
@@ -70,7 +65,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
         chatLogger.outputChannel.show();
     });
-    
+
     // Command to manually trigger conversation check
     const checkConversationsCommand = vscode.commands.registerCommand('chatlogger.checkConversations', async () => {
         if (virtualDocumentMonitor) {
@@ -81,14 +76,14 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage('VirtualDocumentMonitor not initialized');
         }
     });
-    
+
     // Add commands to context subscriptions
     context.subscriptions.push(saveConversationCommand);
     context.subscriptions.push(viewHistoryCommand);
     context.subscriptions.push(clearHistoryCommand);
     context.subscriptions.push(listVirtualDocsCommand);
     context.subscriptions.push(checkConversationsCommand);
-    
+
     // Update configuration when it changes
     const configChangeListener = vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('chatlogger')) {
@@ -96,7 +91,7 @@ export function activate(context: vscode.ExtensionContext) {
             virtualDocumentMonitor.updateConfiguration();
         }
     });
-    
+
     context.subscriptions.push(configChangeListener);
 }
 
