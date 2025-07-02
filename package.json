@@ -1,0 +1,103 @@
+{
+  "name": "chatlogger",
+  "displayName": "ChatLogger",
+  "description": "Record Cursor chat conversations with timestamps, ignoring assistant code output",
+  "version": "0.1.0",
+  "publisher": "chatlogger",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "ChatLogger",
+      "properties": {
+        "chatlogger.autoSave.enabled": {
+          "order": 1,
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically save chat conversations to the ./.chatlogger directory"
+        },
+        "chatlogger.ignoreCodeOutput": {
+          "order": 2,
+          "type": "boolean",
+          "default": true,
+          "description": "Ignore assistant code output in recorded conversations"
+        },
+        "chatlogger.outputFormat": {
+          "order": 3,
+          "type": "string",
+          "enum": [
+            "markdown",
+            "json",
+            "txt"
+          ],
+          "default": "markdown",
+          "description": "Output format for recorded conversations"
+        },
+        "chatlogger.timestampFormat": {
+          "order": 4,
+          "type": "string",
+          "default": "ISO",
+          "enum": [
+            "ISO",
+            "local",
+            "relative"
+          ],
+          "description": "Timestamp format for conversation entries"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "chatlogger.saveConversation",
+        "title": "💾 Save Current Chat Conversation",
+        "category": "ChatLogger"
+      },
+      {
+        "command": "chatlogger.viewHistory",
+        "title": "📚 View Chat History",
+        "category": "ChatLogger"
+      },
+      {
+        "command": "chatlogger.clearHistory",
+        "title": "🗑️ Clear Chat History",
+        "category": "ChatLogger"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "chatlogger.history",
+          "name": "Chat History",
+          "when": "config.chatlogger.autoSave.enabled"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.17.9",
+    "@types/vscode": "^1.93.1",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "fs-extra": "^11.2.0"
+  }
+}
