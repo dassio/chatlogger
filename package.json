@@ -4,6 +4,12 @@
   "description": "Record Cursor chat conversations with timestamps, ignoring assistant code output",
   "version": "0.1.0",
   "publisher": "chatlogger",
+  "icon": "icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chatlogger/chatlogger.git"
+  },
   "engines": {
     "vscode": "^1.93.0"
   },

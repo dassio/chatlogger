@@ -18,3 +18,6 @@ coverage/
 
 # ChatLogger data
 .chatlogger/ 
+
+
+*.vsix
