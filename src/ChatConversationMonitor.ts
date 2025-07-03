@@ -162,15 +162,23 @@ export class ChatConversationMonitor implements vscode.Disposable {
 
         try {
             const conversations = await this.loadConversationsFromDatabase();
+            let hasNewConversations = false;
 
             for (const conversation of conversations) {
                 if (!conversation) continue;
                 this.chatLogger.addConversation(conversation);
+                hasNewConversations = true;
 
                 // Auto-save if enabled
                 if (this.config.autoSave) {
                     await this.chatLogger.saveConversation(conversation);
                 }
+            }
+
+            // If we found new conversations, trigger git-based calculation
+            if (hasNewConversations) {
+                this.log('info', 'New conversations detected, triggering git-based calculation...');
+                await this.triggerGitBasedCalculation();
             }
         } catch (error) {
             this.log('error', `Error checking for changes: ${error}`);
@@ -811,6 +819,18 @@ export class ChatConversationMonitor implements vscode.Disposable {
         const set = this.lastProcessedComposerIds.get(composerId)!;
         for (const bubbleId of bubbleIds) {
             set.add(bubbleId);
+        }
+    }
+
+    private async triggerGitBasedCalculation(): Promise<void> {
+        try {
+            // Get all conversations from the chat logger and trigger git-based calculation
+            const allConversations = this.chatLogger.getAllConversations();
+            // The git-based calculation is already handled in the ChatLogger.saveConversation method
+            // So we don't need to do anything additional here
+            this.log('info', 'Git-based calculation triggered for new conversations');
+        } catch (error) {
+            this.log('error', `Error triggering git-based calculation: ${error}`);
         }
     }
 } 

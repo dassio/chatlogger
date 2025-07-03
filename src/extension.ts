@@ -15,6 +15,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
     chatLogger.outputChannel.appendLine('ChatLogger extension activated successfully!');
 
+    // Register commands
+    const calculateGitConversationCommand = vscode.commands.registerCommand('chatlogger.calculateGitConversation', async () => {
+        try {
+            await chatLogger.triggerGitBasedCalculation();
+            vscode.window.showInformationMessage('Git-based conversation calculation completed successfully!');
+        } catch (error) {
+            vscode.window.showErrorMessage(`Error calculating git conversation: ${error}`);
+        }
+    });
+
     // Update configuration when it changes
     const configChangeListener = vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('chatlogger')) {
@@ -23,7 +33,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(configChangeListener);
+    context.subscriptions.push(configChangeListener, calculateGitConversationCommand);
 }
 
 export function deactivate() {

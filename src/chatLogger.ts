@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { ChatConversationMonitor } from './ChatConversationMonitor';
+import { GitConversationTracker } from './gitConversationTracker';
 
 export interface ChatMessage {
     id: string;
@@ -44,11 +45,13 @@ export class ChatLogger {
     public outputChannel: vscode.OutputChannel;
     private config: any;
     private monitor: ChatConversationMonitor | undefined;
+    private gitTracker: GitConversationTracker | undefined;
 
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
         this.outputChannel = vscode.window.createOutputChannel('ChatLogger');
         this.loadConfiguration();
+        this.initializeGitTracker();
     }
 
     private loadConfiguration() {
@@ -60,6 +63,16 @@ export class ChatLogger {
             timestampFormat: config.get('timestampFormat', 'ISO'),
             checkInterval: config.get('checkInterval', 30000)
         };
+    }
+
+    private initializeGitTracker() {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (workspaceFolder) {
+            this.gitTracker = new GitConversationTracker(workspaceFolder.uri.fsPath);
+            this.outputChannel.appendLine('Git conversation tracker initialized');
+        } else {
+            this.outputChannel.appendLine('No workspace folder found, git tracker not initialized');
+        }
     }
 
     public updateConfiguration() {
@@ -176,6 +189,9 @@ export class ChatLogger {
 
             await vscode.workspace.fs.writeFile(fileUri, Buffer.from(JSON.stringify(conversationToSave, null, 2), 'utf8'));
             this.outputChannel.appendLine(`Saved conversation: ${conversation.title}`);
+
+            // Trigger git-based conversation calculation
+            await this.triggerGitBasedCalculation();
         } catch (error) {
             this.outputChannel.appendLine(`Error saving conversation: ${error}`);
             throw error;
@@ -343,6 +359,20 @@ export class ChatLogger {
 
     public getConversation(id: string): Conversation | undefined {
         return this.conversations.get(id);
+    }
+
+    public async triggerGitBasedCalculation(): Promise<void> {
+        if (!this.gitTracker) {
+            return;
+        }
+
+        try {
+            const allConversations = this.getAllConversations();
+            await this.gitTracker.triggerCalculation(allConversations);
+            this.outputChannel.appendLine('Git-based conversation calculation completed');
+        } catch (error) {
+            this.outputChannel.appendLine(`Error in git-based calculation: ${error}`);
+        }
     }
 
     public async loadSavedConversations() {

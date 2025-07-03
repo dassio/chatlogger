@@ -68,6 +68,13 @@
         }
       }
     },
+    "commands": [
+      {
+        "command": "chatlogger.calculateGitConversation",
+        "title": "Calculate Latest Conversation Since Git Commit",
+        "category": "ChatLogger"
+      }
+    ],
     "views": {
       "explorer": [
         {
