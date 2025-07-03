@@ -8,7 +8,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chatlogger/chatlogger.git"
+    "url": "https://gitee.com/dassio/chatlogger.git"
   },
   "engines": {
     "vscode": "^1.93.0"
@@ -71,33 +71,6 @@
         }
       }
     },
-    "commands": [
-      {
-        "command": "chatlogger.saveConversation",
-        "title": "💾 Save Current Chat Conversation",
-        "category": "ChatLogger"
-      },
-      {
-        "command": "chatlogger.viewHistory",
-        "title": "📚 View Chat History",
-        "category": "ChatLogger"
-      },
-      {
-        "command": "chatlogger.clearHistory",
-        "title": "🗑️ Clear Chat History",
-        "category": "ChatLogger"
-      },
-      {
-        "command": "chatlogger.listVirtualDocs",
-        "title": "🗂️ List Virtual Docs",
-        "category": "ChatLogger"
-      },
-      {
-        "command": "chatlogger.checkConversations",
-        "title": "🔍 Check Conversations",
-        "category": "ChatLogger"
-      }
-    ],
     "views": {
       "explorer": [
         {
