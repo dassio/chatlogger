@@ -84,7 +84,7 @@ export class ChatLogger {
             return new Date(date).toLocaleString();
         }
         try {
-            const storagePath = this.getStoragePath();
+            const storagePath = path.join(this.getStoragePath(), 'conversations');
             await fs.ensureDir(storagePath);
 
             // Use createdAt date and composerId as the file name
