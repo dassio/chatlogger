@@ -101,14 +101,17 @@ export class ChatConversationMonitor implements vscode.Disposable {
         const normCurrent = path.normalize(currentWorkspacePath).replace(/\\/g, '/');
         let normConv = conversationWorkspacePath.replace(/\\/g, '/');
 
-        // Remove SSH/host part if present (e.g., "host:/path/to/file" -> "/path/to/file")
-        const sshPrefixMatch = normConv.match(/^[^:]+:(.*)$/);
-        if (sshPrefixMatch) {
-            normConv = sshPrefixMatch[1];
+        // Remove SSH/host part if present (e.g., "host:/path/to/file" or "host:C:/path/to/file")
+        // But don't remove Windows drive letters like "C:"
+        // Pattern: host:path (where host doesn't look like a drive letter)
+        const sshPrefixMatch = normConv.match(/^([a-zA-Z][a-zA-Z0-9._-]+):(.+)$/);
+        if (sshPrefixMatch && !sshPrefixMatch[1].match(/^[A-Za-z]$/)) {
+            // Only remove if it's not a single letter (drive letter)
+            normConv = sshPrefixMatch[2];
         }
 
-        // Ensure leading slash for comparison
-        if (!normConv.startsWith('/')) {
+        // Heuristic: If path starts with drive letter, it's Windows; otherwise, add leading slash if missing
+        if (!normConv.match(/^[a-zA-Z]:\//) && !normConv.startsWith('/')) {
             normConv = '/' + normConv;
         }
 
@@ -380,7 +383,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
                 }
             }
 
-            this.log('info', 'No workspace path found in any method');
+            this.log('debug', 'No workspace path found in any method');
             return undefined;
         } catch (error) {
             return undefined;
