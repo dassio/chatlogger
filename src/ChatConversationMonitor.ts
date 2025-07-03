@@ -63,13 +63,57 @@ export class ChatConversationMonitor implements vscode.Disposable {
         return null;
     }
 
+    private getCurrentWorkspaceInfo(): { type: string; path: string } | null {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            const workspaceUri = workspaceFolders[0].uri;
+            const scheme = workspaceUri.scheme;
+
+            let type = 'local';
+            let path = workspaceUri.fsPath;
+
+            if (scheme === 'vscode-remote') {
+                if (workspaceUri.authority.startsWith('ssh-remote+')) {
+                    type = 'ssh';
+                    const host = workspaceUri.authority.replace('ssh-remote+', '');
+                    path = `${host}:${workspaceUri.path}`;
+                } else if (workspaceUri.authority.startsWith('wsl+')) {
+                    type = 'wsl';
+                    const distro = workspaceUri.authority.replace('wsl+', '');
+                    path = `wsl:${distro}:${workspaceUri.path}`;
+                } else if (workspaceUri.authority.startsWith('dev-container+')) {
+                    type = 'container';
+                    const containerId = workspaceUri.authority.replace('dev-container+', '');
+                    path = `container:${containerId}:${workspaceUri.path}`;
+                } else {
+                    type = 'remote';
+                    path = `${workspaceUri.authority}:${workspaceUri.path}`;
+                }
+            }
+
+            return { type, path };
+        }
+        return null;
+    }
+
     private isSameWorkspace(conversationWorkspacePath: string, currentWorkspacePath: string): boolean {
-        // Normalize paths for comparison
-        const normalizedConversationPath = path.normalize(conversationWorkspacePath);
-        const normalizedCurrentPath = path.normalize(currentWorkspacePath);
-        
-        // Check if conversation workspace is the same as current workspace
-        return normalizedConversationPath === normalizedCurrentPath;
+        // Normalize both paths to use forward slashes
+        const normCurrent = path.normalize(currentWorkspacePath).replace(/\\/g, '/');
+        let normConv = conversationWorkspacePath.replace(/\\/g, '/');
+
+        // Remove SSH/host part if present (e.g., "host:/path/to/file" -> "/path/to/file")
+        const sshPrefixMatch = normConv.match(/^[^:]+:(.*)$/);
+        if (sshPrefixMatch) {
+            normConv = sshPrefixMatch[1];
+        }
+
+        // Ensure leading slash for comparison
+        if (!normConv.startsWith('/')) {
+            normConv = '/' + normConv;
+        }
+
+        // Check if currentWorkspacePath is the prefix of the conversation path
+        return normConv.startsWith(normCurrent);
     }
 
     private initializeDatabase(): void {
@@ -100,12 +144,12 @@ export class ChatConversationMonitor implements vscode.Disposable {
         // Only log once
     }
 
-    private async checkForChanges(trigger: string): Promise<void> {        
+    private async checkForChanges(trigger: string): Promise<void> {
         if (this.isCheckingForChanges) {
             this.log('info', 'Already checking for changes, skipping...');
             return;
         }
-        
+
         if (!this.db) {
             this.log('info', 'Database not initialized, skipping...');
             return;
@@ -113,13 +157,13 @@ export class ChatConversationMonitor implements vscode.Disposable {
 
         this.isCheckingForChanges = true;
 
-        try {            
+        try {
             const conversations = await this.loadConversationsFromDatabase();
-            
+
             for (const conversation of conversations) {
                 if (!conversation) continue;
                 this.chatLogger.addConversation(conversation);
-                
+
                 // Auto-save if enabled
                 if (this.config.autoSave) {
                     await this.chatLogger.saveConversation(conversation);
@@ -213,7 +257,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
 
             // Extract workspace information from the data structure
             workspacePath = await this.extractWorkspacePathFromData(data, key);
-            
+
             if (!workspacePath) {
                 this.log('debug', 'No workspace path found in conversation data, skipping.');
                 return null;
@@ -224,7 +268,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
                 this.log('debug', `Skipping conversation: workspace ${workspacePath} not matching current workspace ${currentWorkspacePath}`);
                 return null;
             }
-            
+
             this.log('debug', `Accepted conversation: workspace ${workspacePath} matches current workspace ${currentWorkspacePath}`);
 
             // --- NEW LOGIC: Build messages from new bubble data only ---
@@ -298,9 +342,23 @@ export class ChatConversationMonitor implements vscode.Disposable {
                 return undefined;
             }
 
-            // Query messageRequestContext for each bubble
+            // Check current workspace type first
+            const currentWorkspaceInfo = this.getCurrentWorkspaceInfo();
+            if (currentWorkspaceInfo) {
+                this.log('debug', `Current workspace type: ${currentWorkspaceInfo.type}, path: ${currentWorkspaceInfo.path}`);
+
+                // For remote workspaces, use bubble data to extract workspace path
+                if (currentWorkspaceInfo.type !== 'local') {
+                    const remoteWorkspacePath = await this.extractRemoteWorkspaceFromBubbles(composerId, bubbleIds);
+                    if (remoteWorkspacePath) {
+                        return remoteWorkspacePath;
+                    }
+                }
+            }
+
+            // For local projects, use projectLayouts (preferred method)
             const messageRequestContexts = await this.getAllMessageRequestContexts(composerId, bubbleIds);
-            
+
             // Check each messageRequestContext for projectLayouts
             for (const contextData of messageRequestContexts) {
                 if (contextData.projectLayouts && Array.isArray(contextData.projectLayouts)) {
@@ -322,7 +380,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
                 }
             }
 
-            this.log('info', 'No workspace path found in any messageRequestContext');
+            this.log('info', 'No workspace path found in any method');
             return undefined;
         } catch (error) {
             return undefined;
@@ -333,6 +391,129 @@ export class ChatConversationMonitor implements vscode.Disposable {
         // Only extract from keys like "composerData:{composerId}"
         const match = key.match(/^composerData:([^:]+)/);
         return match ? match[1] : undefined;
+    }
+
+    private extractWorkspaceFromUri(uriString: string): string | undefined {
+        try {
+            // Handle different URI schemes
+            if (uriString.startsWith('vscode-remote://ssh-remote')) {
+                // SSH remote URI: vscode-remote://ssh-remote%2Bhost/path
+                const uriMatch = uriString.match(/vscode-remote:\/\/ssh-remote%2B([^\/]+)\/(.+)/);
+                if (uriMatch) {
+                    const host = decodeURIComponent(uriMatch[1]);
+                    const remotePath = decodeURIComponent(uriMatch[2]);
+                    // Extract workspace root from the full path
+                    const pathParts = remotePath.split('/');
+                    // Find the workspace root (usually the project folder)
+                    for (let i = pathParts.length - 1; i >= 0; i--) {
+                        const potentialWorkspace = pathParts.slice(0, i + 1).join('/');
+                        if (potentialWorkspace && potentialWorkspace !== '/') {
+                            return `${host}:${potentialWorkspace}`;
+                        }
+                    }
+                }
+            } else if (uriString.startsWith('vscode-remote://wsl')) {
+                // WSL remote URI: vscode-remote://wsl%2Bdistro/path
+                const uriMatch = uriString.match(/vscode-remote:\/\/wsl%2B([^\/]+)\/(.+)/);
+                if (uriMatch) {
+                    const distro = decodeURIComponent(uriMatch[1]);
+                    const wslPath = decodeURIComponent(uriMatch[2]);
+                    const pathParts = wslPath.split('/');
+                    for (let i = pathParts.length - 1; i >= 0; i--) {
+                        const potentialWorkspace = pathParts.slice(0, i + 1).join('/');
+                        if (potentialWorkspace && potentialWorkspace !== '/') {
+                            return `wsl:${distro}:${potentialWorkspace}`;
+                        }
+                    }
+                }
+            } else if (uriString.startsWith('vscode-remote://dev-container')) {
+                // Dev container URI: vscode-remote://dev-container%2BcontainerId/path
+                const uriMatch = uriString.match(/vscode-remote:\/\/dev-container%2B([^\/]+)\/(.+)/);
+                if (uriMatch) {
+                    const containerId = decodeURIComponent(uriMatch[1]);
+                    const containerPath = decodeURIComponent(uriMatch[2]);
+                    const pathParts = containerPath.split('/');
+                    for (let i = pathParts.length - 1; i >= 0; i--) {
+                        const potentialWorkspace = pathParts.slice(0, i + 1).join('/');
+                        if (potentialWorkspace && potentialWorkspace !== '/') {
+                            return `container:${containerId}:${potentialWorkspace}`;
+                        }
+                    }
+                }
+            } else if (uriString.startsWith('file:///')) {
+                // Local file URI: file:///path
+                const uriMatch = uriString.match(/file:\/\/\/(.+)/);
+                if (uriMatch) {
+                    const localPath = decodeURIComponent(uriMatch[1]);
+                    const pathParts = localPath.split(/[\/\\]/);
+                    for (let i = pathParts.length - 1; i >= 0; i--) {
+                        const potentialWorkspace = pathParts.slice(0, i + 1).join(path.sep);
+                        if (potentialWorkspace && potentialWorkspace !== path.sep) {
+                            return potentialWorkspace;
+                        }
+                    }
+                }
+            }
+
+            return undefined;
+        } catch (error) {
+            this.log('error', `Error extracting workspace from URI: ${error}`);
+            return undefined;
+        }
+    }
+
+    private async extractRemoteWorkspaceFromBubbles(composerId: string, bubbleIds: string[]): Promise<string | undefined> {
+        try {
+            // Check bubbles for remote workspace URIs (attachedFileCodeChunksUris and toolFormerData)
+            for (const bubbleId of bubbleIds) {
+                const bubbleKey = `bubbleId:${composerId}:${bubbleId}`;
+                const bubbleData = await this.getBubbleData(bubbleKey);
+
+                if (bubbleData) {
+                    // Check attachedFileCodeChunksUris in bubble data
+                    if (bubbleData.attachedFileCodeChunksUris && Array.isArray(bubbleData.attachedFileCodeChunksUris)) {
+                        for (const uriInfo of bubbleData.attachedFileCodeChunksUris) {
+                            if (uriInfo._formatted && uriInfo._formatted.startsWith('vscode-remote://')) {
+                                const workspacePath = this.extractWorkspaceFromUri(uriInfo._formatted);
+                                if (workspacePath) {
+                                    this.log('debug', `Found workspace path from bubble attachedFileCodeChunksUris: ${workspacePath}`);
+                                    return workspacePath;
+                                }
+                            }
+                        }
+                    }
+
+                    // Check toolFormerData for grep_search results in bubble data
+                    if (bubbleData.toolFormerData && Array.isArray(bubbleData.toolFormerData)) {
+                        for (const toolData of bubbleData.toolFormerData) {
+                            if (toolData.name === 'grep_search' && toolData.result) {
+                                try {
+                                    const result = JSON.parse(toolData.result);
+                                    if (result.internal && result.internal.results && Array.isArray(result.internal.results)) {
+                                        for (const searchResult of result.internal.results) {
+                                            if (searchResult.resource && searchResult.resource.startsWith('vscode-remote://')) {
+                                                const workspacePath = this.extractWorkspaceFromUri(searchResult.resource);
+                                                if (workspacePath) {
+                                                    this.log('debug', `Found workspace path from bubble toolFormerData grep_search: ${workspacePath}`);
+                                                    return workspacePath;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (parseError) {
+                                    this.log('error', `Error parsing bubble toolFormerData result: ${parseError}`);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return undefined;
+        } catch (error) {
+            this.log('error', `Error extracting remote workspace from bubbles: ${error}`);
+            return undefined;
+        }
     }
 
     private async getBubbleData(bubbleKey: string): Promise<any | undefined> {
@@ -350,7 +531,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
                         resolve(undefined);
                         return;
                     }
-                    
+
                     if (row) {
                         try {
                             const data = JSON.parse(row.value);
@@ -369,7 +550,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
 
     private extractBubbleIdsFromComposerData(data: any): string[] {
         const bubbleIds: string[] = [];
-        
+
         if (data.fullConversationHeadersOnly && Array.isArray(data.fullConversationHeadersOnly)) {
             for (const bubble of data.fullConversationHeadersOnly) {
                 if (bubble.bubbleId) {
@@ -377,7 +558,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
                 }
             }
         }
-        
+
         return bubbleIds;
     }
 
@@ -404,7 +585,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
                     [key],
                     (err, row: { key: string; value: string } | undefined) => {
                         completedQueries++;
-                        
+
                         if (err) {
                             this.log('error', `Error getting messageRequestContext for bubble ${bubbleId}: ${err}`);
                         } else if (row) {
@@ -432,7 +613,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
             // Load storage.json to get workspace path mapping
             const storagePath = this.getCursorStoragePath();
             const storageFile = path.join(storagePath, 'storage.json');
-            
+
             if (!fs.existsSync(storageFile)) {
                 this.log('info', `Storage file not found: ${storageFile}`);
                 return undefined;
@@ -445,13 +626,45 @@ export class ChatConversationMonitor implements vscode.Disposable {
             if (storage.backupWorkspaces && storage.backupWorkspaces.folders) {
                 for (const folder of storage.backupWorkspaces.folders) {
                     if (folder.folderUri) {
-                        // Extract the path from folderUri
-                        const uriMatch = folder.folderUri.match(/file:\/\/\/(.+)/);
-                        if (uriMatch) {
-                            const decodedPath = decodeURIComponent(uriMatch[1]);
-                            const pathParts = decodedPath.split('/');
+                        let decodedPath: string | undefined;
+
+                        // Handle different URI schemes
+                        if (folder.folderUri.startsWith('file:///')) {
+                            // Local file URI
+                            const uriMatch = folder.folderUri.match(/file:\/\/\/(.+)/);
+                            if (uriMatch) {
+                                decodedPath = decodeURIComponent(uriMatch[1]);
+                            }
+                        } else if (folder.folderUri.startsWith('vscode-remote://ssh-remote')) {
+                            // SSH remote URI
+                            const uriMatch = folder.folderUri.match(/vscode-remote:\/\/ssh-remote%2B([^\/]+)\/(.+)/);
+                            if (uriMatch) {
+                                const host = decodeURIComponent(uriMatch[1]);
+                                const remotePath = decodeURIComponent(uriMatch[2]);
+                                decodedPath = `${host}:${remotePath}`;
+                            }
+                        } else if (folder.folderUri.startsWith('vscode-remote://wsl')) {
+                            // WSL remote URI
+                            const uriMatch = folder.folderUri.match(/vscode-remote:\/\/wsl%2B([^\/]+)\/(.+)/);
+                            if (uriMatch) {
+                                const distro = decodeURIComponent(uriMatch[1]);
+                                const wslPath = decodeURIComponent(uriMatch[2]);
+                                decodedPath = `wsl:${distro}:${wslPath}`;
+                            }
+                        } else if (folder.folderUri.startsWith('vscode-remote://dev-container')) {
+                            // Dev container URI
+                            const uriMatch = folder.folderUri.match(/vscode-remote:\/\/dev-container%2B([^\/]+)\/(.+)/);
+                            if (uriMatch) {
+                                const containerId = decodeURIComponent(uriMatch[1]);
+                                const containerPath = decodeURIComponent(uriMatch[2]);
+                                decodedPath = `container:${containerId}:${containerPath}`;
+                            }
+                        }
+
+                        if (decodedPath) {
+                            const pathParts = decodedPath.split(/[\/\\:]/);
                             const nameFromPath = pathParts[pathParts.length - 1];
-                            
+
                             // Check if the last part matches the workspace name
                             if (nameFromPath === workspaceName) {
                                 this.log('debug', `Matched workspace name "${workspaceName}" with path "${decodedPath}"`);
@@ -513,7 +726,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
 
         // Remove code blocks
         filteredContent = content.replace(/```[\s\S]*?```/g, '[CODE_BLOCK_FILTERED]');
-        
+
         // Remove inline code
         filteredContent = filteredContent.replace(/`[^`]+`/g, '[INLINE_CODE_FILTERED]');
 
@@ -534,10 +747,10 @@ export class ChatConversationMonitor implements vscode.Disposable {
     private createConversation(title: string, messages: ChatMessage[], data?: any, key?: string, workspacePath?: string): Conversation {
         const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const now = new Date();
-        
+
         const userMessages = messages.filter(msg => msg.role === 'user').length;
         const assistantMessages = messages.filter(msg => msg.role === 'assistant').length;
-        const totalTokensEstimated = messages.reduce((sum, msg) => 
+        const totalTokensEstimated = messages.reduce((sum, msg) =>
             sum + Math.ceil(msg.content.split(/\s+/).length * 1.3), 0
         );
 

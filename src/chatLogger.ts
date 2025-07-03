@@ -79,13 +79,44 @@ export class ChatLogger {
         }
     }
 
+    private recalculateMetadata(conversation: Conversation): Conversation {
+        const messages = conversation.messages || [];
+        const userMessages = messages.filter(msg => msg.role === 'user').length;
+        const assistantMessages = messages.filter(msg => msg.role === 'assistant').length;
+        const totalTokensEstimated = messages.reduce((sum, msg) =>
+            sum + Math.ceil((msg.content || '').split(/\s+/).length * 1.3), 0
+        );
+        return {
+            ...conversation,
+            metadata: {
+                ...conversation.metadata,
+                totalMessages: messages.length,
+                userMessages,
+                assistantMessages,
+                totalTokensEstimated,
+            }
+        };
+    }
+
     public async saveConversation(conversation: Conversation): Promise<void> {
         function toLocalString(date: Date | string): string {
             return new Date(date).toLocaleString();
         }
         try {
-            const storagePath = path.join(this.getStoragePath(), 'conversations');
-            await fs.ensureDir(storagePath);
+            // Get the workspace folder URI
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            if (!workspaceFolder) {
+                throw new Error('No workspace folder found');
+            }
+            // Build the .chatlogger/conversations directory URI
+            const storageUri = vscode.Uri.joinPath(workspaceFolder.uri, '.chatlogger', 'conversations');
+
+            // Ensure the directory exists (create if not)
+            try {
+                await vscode.workspace.fs.createDirectory(storageUri);
+            } catch (e) {
+                // Ignore if already exists
+            }
 
             // Use createdAt date and composerId as the file name
             const composerId = conversation.metadata.composerId;
@@ -97,12 +128,19 @@ export class ChatLogger {
                 : new Date(conversation.createdAt);
             const isoString = createdAt.toISOString().replace(/[:.]/g, '-');
             const fileName = `${isoString}_${composerId}.json`;
-            const filePath = path.join(storagePath, fileName);
+            const fileUri = vscode.Uri.joinPath(storageUri, fileName);
 
+            // Merge with existing conversation if it exists
             let mergedConversation = conversation;
-            if (await fs.pathExists(filePath)) {
-                // Load existing conversation and merge messages
-                const existingContent = await fs.readFile(filePath, 'utf8');
+            let fileExists = false;
+            try {
+                await vscode.workspace.fs.stat(fileUri);
+                fileExists = true;
+            } catch (e) {
+                fileExists = false;
+            }
+            if (fileExists) {
+                const existingContent = Buffer.from(await vscode.workspace.fs.readFile(fileUri)).toString('utf8');
                 const existingConversation: Conversation = JSON.parse(existingContent);
                 const existingMessages = existingConversation.messages || [];
                 const newMessages = conversation.messages || [];
@@ -115,12 +153,14 @@ export class ChatLogger {
                     seen.add(key);
                     return true;
                 });
-                mergedConversation = {
+                mergedConversation = this.recalculateMetadata({
                     ...conversation,
                     messages: mergedMessages,
                     createdAt: existingConversation.createdAt ? new Date(existingConversation.createdAt) : new Date(conversation.createdAt),
                     updatedAt: new Date(),
-                };
+                });
+            } else {
+                mergedConversation = this.recalculateMetadata(mergedConversation);
             }
 
             // Convert all date fields to local time strings
@@ -134,7 +174,7 @@ export class ChatLogger {
                 }))
             };
 
-            await fs.writeFile(filePath, JSON.stringify(conversationToSave, null, 2));
+            await vscode.workspace.fs.writeFile(fileUri, Buffer.from(JSON.stringify(conversationToSave, null, 2), 'utf8'));
             this.outputChannel.appendLine(`Saved conversation: ${conversation.title}`);
         } catch (error) {
             this.outputChannel.appendLine(`Error saving conversation: ${error}`);
@@ -307,31 +347,57 @@ export class ChatLogger {
 
     public async loadSavedConversations() {
         try {
-            const storagePath = this.getStoragePath();
-            await fs.ensureDir(storagePath);
-            const files = await fs.readdir(storagePath);
-            for (const file of files) {
-                if (file.endsWith('.json')) {
-                    const filePath = path.join(storagePath, file);
-                    const content = await fs.readFile(filePath, 'utf8');
-                    const conversation: Conversation = JSON.parse(content);
-                    
-                    // Convert string dates back to Date objects
-                    conversation.createdAt = new Date(conversation.createdAt);
-                    conversation.updatedAt = new Date(conversation.updatedAt);
-                    conversation.messages.forEach(msg => {
-                        msg.timestamp = new Date(msg.timestamp);
-                    });
-                    
-                    // Mark composerId and bubbleIds as processed in the monitor
-                    if (conversation.metadata.composerId && this.monitor) {
-                        const bubbleIds = conversation.messages
-                            .map(msg => msg.bubbleId)
-                            .filter((id): id is string => Boolean(id));
-                        this.monitor.markComposerIdProcessed(conversation.metadata.composerId, bubbleIds);
-                    }
+            // Get the workspace folder URI
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            if (!workspaceFolder) {
+                this.outputChannel.appendLine('No workspace folder found');
+                return;
+            }
+            // Build the .chatlogger/conversations directory URI
+            const storageUri = vscode.Uri.joinPath(workspaceFolder.uri, '.chatlogger', 'conversations');
 
-                    this.conversations.set(conversation.id, conversation);
+            // Ensure the directory exists (create if not)
+            try {
+                await vscode.workspace.fs.createDirectory(storageUri);
+            } catch (e) {
+                // Ignore if already exists
+            }
+
+            // List all files in the directory
+            let files: [string, vscode.FileType][] = [];
+            try {
+                files = await vscode.workspace.fs.readDirectory(storageUri);
+            } catch (e) {
+                this.outputChannel.appendLine('No conversation directory found');
+                return;
+            }
+
+            for (const [fileName, fileType] of files) {
+                if (fileType === vscode.FileType.File && fileName.endsWith('.json')) {
+                    const fileUri = vscode.Uri.joinPath(storageUri, fileName);
+                    try {
+                        const content = Buffer.from(await vscode.workspace.fs.readFile(fileUri)).toString('utf8');
+                        const conversation: Conversation = JSON.parse(content);
+
+                        // Convert string dates back to Date objects
+                        conversation.createdAt = new Date(conversation.createdAt);
+                        conversation.updatedAt = new Date(conversation.updatedAt);
+                        conversation.messages.forEach(msg => {
+                            msg.timestamp = new Date(msg.timestamp);
+                        });
+
+                        // Mark composerId and bubbleIds as processed in the monitor
+                        if (conversation.metadata.composerId && this.monitor) {
+                            const bubbleIds = conversation.messages
+                                .map(msg => msg.bubbleId)
+                                .filter((id): id is string => Boolean(id));
+                            this.monitor.markComposerIdProcessed(conversation.metadata.composerId, bubbleIds);
+                        }
+
+                        this.conversations.set(conversation.id, conversation);
+                    } catch (error) {
+                        this.outputChannel.appendLine(`Error loading conversation file ${fileName}: ${error}`);
+                    }
                 }
             }
             this.outputChannel.appendLine(`Loaded ${this.conversations.size} saved conversations`);

@@ -2,8 +2,6 @@
 
 A VS Code extension that automatically records Cursor chat conversations with timestamps, while intelligently filtering out assistant code output for cleaner logs.
 
-![ChatLogger Icon](icon.png)
-
 ## Features
 
 - **🔄 Automatic Recording**: Automatically saves chat conversations as they happen
@@ -13,6 +11,7 @@ A VS Code extension that automatically records Cursor chat conversations with ti
 - **📊 Conversation History**: View and manage your chat history within VS Code
 - **⚙️ Configurable**: Customize behavior through VS Code settings
 - **🔍 Real-time Monitoring**: Continuously monitors for new conversations
+- **🤫 Silent Operation**: Runs completely in the background without user commands
 
 ## Installation
 
@@ -24,7 +23,7 @@ A VS Code extension that automatically records Cursor chat conversations with ti
 
 ### From Source
 ```bash
-git clone https://github.com/chatlogger/chatlogger.git
+git clone https://gitee.com/dassio/chatlogger.git
 cd chatlogger
 npm install
 npm run build
@@ -43,8 +42,10 @@ Once installed, ChatLogger automatically:
 ### Viewing Conversations
 
 1. Open the Explorer panel (Ctrl+Shift+E)
-2. Look for the "Chat History" section
+2. Look for the "Chat History" section (when auto-save is enabled)
 3. Click on any conversation to view its details
+
+**Note**: The extension operates completely automatically. All conversations are saved to the `.chatlogger` directory in your workspace without any manual intervention required.
 
 ## Configuration
 
@@ -125,8 +126,8 @@ Each conversation file contains:
 ### No Conversations Appearing
 1. Check if auto-save is enabled in settings
 2. Verify Cursor is running and has active conversations
-3. Use the "Check Conversations" command to manually trigger detection
-4. Check the ChatLogger output channel for error messages
+3. Check the ChatLogger output channel for error messages
+4. Ensure the extension is activated (should happen automatically on startup)
 
 ### Missing Messages
 1. Ensure the check interval is appropriate for your usage
@@ -136,7 +137,7 @@ Each conversation file contains:
 ### Performance Issues
 1. Increase the check interval to reduce CPU usage
 2. Clear old conversation history if storage becomes large
-3. Disable auto-save if manual saving is preferred
+3. Disable auto-save in settings if needed
 
 ## Development
 
@@ -159,19 +160,15 @@ npm run package
 
 ## Contributing
 
-1. Fork the repository
+1. Fork the repository on Gitee
 2. Create a feature branch
 3. Make your changes
 4. Add tests if applicable
 5. Submit a pull request
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Support
 
-- **Issues**: Report bugs and request features on GitHub
+- **Issues**: Report bugs and request features on Gitee
 - **Discussions**: Ask questions and share ideas
 - **Documentation**: Check the code comments for implementation details
 
@@ -184,6 +181,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Configurable settings
 - Conversation history viewer
 - Code output filtering
+- Silent background operation (no manual commands)
 
 ---
 

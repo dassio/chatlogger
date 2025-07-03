@@ -6,10 +6,7 @@
   "publisher": "chatlogger",
   "icon": "icon.png",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://gitee.com/dassio/chatlogger.git"
-  },
+  "repository": "https://gitee.com/dassio/chatlogger.git",
   "engines": {
     "vscode": "^1.93.0"
   },
