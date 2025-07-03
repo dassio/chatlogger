@@ -678,7 +678,7 @@ export class ChatConversationMonitor implements vscode.Disposable {
                 }
             }
 
-            this.log('info', `No matching workspace found for name: ${workspaceName}`);
+            this.log('debug', `No matching workspace found for name: ${workspaceName}`);
             return undefined;
         } catch (error) {
             this.log('error', `Error getting workspace path from name: ${error}`);
