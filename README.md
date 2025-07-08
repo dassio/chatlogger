@@ -1,6 +1,6 @@
 # ChatLogger
 
-A VS Code extension that automatically records Cursor chat conversations with timestamps, while intelligently filtering out assistant code output for cleaner logs.
+A VS Code extension that automatically records Cursor chat conversations with timestamps, while intelligently filtering out assistant code output for cleaner logs. **Currently tested and optimized for Cursor IDE.**
 
 ## Features
 
@@ -8,15 +8,23 @@ A VS Code extension that automatically records Cursor chat conversations with ti
 - **⏰ Timestamp Tracking**: Records precise timestamps for each message
 - **🧹 Smart Filtering**: Optionally ignores assistant code output for cleaner logs
 - **📊 Conversation History**: View and manage your chat history within VS Code
-- **⚙️ Configurable**: Customize behavior through VS Code settings
 - **🔍 Real-time Monitoring**: Continuously monitors for new conversations
 - **🤫 Silent Operation**: Runs completely in the background without user commands
+- **📝 Git-based Tracking**: Automatically generates `.chatlogger/latest_conversation_since_git.json` with all new messages since the last git commit
 
 ## Installation
 
+### From VS Code Marketplace
+1. Open Cursor (recommended) or VS Code
+2. Go to Extensions (Ctrl+Shift+X)
+3. Search for "ChatLogger" or "xiangbin-li.chatlogger"
+4. Click "Install"
+
+**Note**: This extension has been tested and optimized for Cursor IDE. While it may work in VS Code, it's specifically designed to capture Cursor's chat conversations.
+
 ### From VSIX
 1. Download the latest `.vsix` file from the releases
-2. In VS Code, go to Extensions (Ctrl+Shift+X)
+2. In VS Code/Cursor, go to Extensions (Ctrl+Shift+X)
 3. Click the "..." menu and select "Install from VSIX..."
 4. Choose the downloaded file
 
@@ -37,6 +45,7 @@ Once installed, ChatLogger automatically:
 1. Monitors for new Cursor chat conversations
 2. Saves them to the `.chatlogger` directory in your workspace
 3. Updates the Chat History view in the Explorer panel
+4. Generates `.chatlogger/latest_conversation_since_git.json` with all new messages since the last git commit
 
 ### Viewing Conversations
 
@@ -76,10 +85,11 @@ Conversations are saved in the following structure:
 ```
 ./
 ├── .chatlogger/
-│   └── conversations/
-│       ├── 2024-01-15T10-30-00-000Z_composer123.json
-│       ├── 2024-01-15T14-45-00-000Z_composer456.json
-│       └── ...
+│   ├── conversations/
+│   │   ├── 2024-01-15T10-30-00-000Z_composer123.json
+│   │   ├── 2024-01-15T14-45-00-000Z_composer456.json
+│   │   └── ...
+│   └── latest_conversation_since_git.json
 ```
 
 Each conversation file contains:
@@ -87,6 +97,38 @@ Each conversation file contains:
 - User and assistant roles
 - Metadata (workspace path, file context, etc.)
 - Filtered content (if code output filtering is enabled)
+
+## Git-based Tracking
+
+ChatLogger automatically generates a `latest_conversation_since_git.json` file that contains all new messages since your last git commit. This is useful for:
+
+- **Commit Messages**: Generate commit messages based on recent chat activity
+- **Progress Tracking**: See what was discussed since your last commit
+- **Documentation**: Keep track of development discussions
+
+### Latest Conversation Format
+```json
+[
+  {
+    "content": "How do I implement this feature?",
+    "role": "user",
+    "timestamp": "7/3/2025, 5:14:49 PM",
+    "conversationId": "conv_1751544117462_0hfj3h2y1"
+  },
+  {
+    "content": "Here's how you can implement it...",
+    "role": "assistant", 
+    "timestamp": "7/3/2025, 5:15:12 PM",
+    "conversationId": "conv_1751544117462_0hfj3h2y1"
+  }
+]
+```
+
+### Manual Trigger
+You can manually trigger the git-based calculation using the command palette:
+1. Press `Ctrl+Shift+P`
+2. Type "Calculate Latest Conversation Since Git Commit"
+3. Select the ChatLogger command
 
 ## Conversation Format
 
@@ -184,4 +226,4 @@ npm run package
 
 ---
 
-**Note**: This extension is designed specifically for Cursor chat conversations. It may not work with other chat interfaces in VS Code. 
+**Note**: This extension is designed specifically for Cursor chat conversations and has been tested on Cursor IDE. While it may work in VS Code, it's optimized for Cursor's chat interface and database structure. 
