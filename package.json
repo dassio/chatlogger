@@ -2,11 +2,11 @@
   "name": "chatlogger",
   "displayName": "ChatLogger",
   "description": "Record Cursor chat conversations with timestamps, ignoring assistant code output",
-  "version": "0.1.0",
-  "publisher": "chatlogger",
+  "version": "0.1.1",
+  "publisher": "xiangbin-li",
   "icon": "icon.png",
   "license": "MIT",
-  "repository": "https://gitee.com/dassio/chatlogger.git",
+  "repository": "https://github.com/dassio/chatlogger",
   "engines": {
     "vscode": "^1.93.0"
   },

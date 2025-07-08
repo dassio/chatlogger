@@ -7,7 +7,6 @@ A VS Code extension that automatically records Cursor chat conversations with ti
 - **🔄 Automatic Recording**: Automatically saves chat conversations as they happen
 - **⏰ Timestamp Tracking**: Records precise timestamps for each message
 - **🧹 Smart Filtering**: Optionally ignores assistant code output for cleaner logs
-- **📁 Multiple Formats**: Export conversations in Markdown, JSON, or plain text
 - **📊 Conversation History**: View and manage your chat history within VS Code
 - **⚙️ Configurable**: Customize behavior through VS Code settings
 - **🔍 Real-time Monitoring**: Continuously monitors for new conversations
@@ -23,7 +22,7 @@ A VS Code extension that automatically records Cursor chat conversations with ti
 
 ### From Source
 ```bash
-git clone https://gitee.com/dassio/chatlogger.git
+git clone https://github.com/dassio/chatlogger.git
 cd chatlogger
 npm install
 npm run build
@@ -160,7 +159,7 @@ npm run package
 
 ## Contributing
 
-1. Fork the repository on Gitee
+1. Fork the repository on GitHub
 2. Create a feature branch
 3. Make your changes
 4. Add tests if applicable
@@ -168,7 +167,7 @@ npm run package
 
 ## Support
 
-- **Issues**: Report bugs and request features on Gitee
+- **Issues**: Report bugs and request features on GitHub
 - **Discussions**: Ask questions and share ideas
 - **Documentation**: Check the code comments for implementation details
 
