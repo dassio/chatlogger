@@ -1,11 +1,5 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs-extra';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { Conversation, ChatMessage } from './chatLogger';
-
-const execAsync = promisify(exec);
+import { Conversation } from './chatLogger';
 
 export interface GitConversationMessageOutput {
     content: string;
@@ -16,12 +10,12 @@ export interface GitConversationMessageOutput {
 
 export class GitConversationTracker {
     private lastGitCommitTime: Date | null = null;
-    private outputFilePath: string;
-    private workspacePath: string;
+    private outputFileUri: vscode.Uri;
+    private workspaceFolder: vscode.WorkspaceFolder;
 
-    constructor(workspacePath: string) {
-        this.workspacePath = workspacePath;
-        this.outputFilePath = path.join(workspacePath, '.chatlogger', 'latest_conversation_since_git.json');
+    constructor(workspaceFolder: vscode.WorkspaceFolder) {
+        this.workspaceFolder = workspaceFolder;
+        this.outputFileUri = vscode.Uri.joinPath(workspaceFolder.uri, '.chatlogger', 'latest_conversation_since_git.json');
         this.initializeGitCommitTime();
     }
 
@@ -35,17 +29,21 @@ export class GitConversationTracker {
 
     private async updateLastGitCommitTime(): Promise<void> {
         try {
-            const { stdout } = await execAsync('git log -1 --format=%cd --date=iso', {
-                cwd: this.workspacePath
-            });
-            
-            if (stdout.trim()) {
-                this.lastGitCommitTime = new Date(stdout.trim());
-                console.log(`Last git commit time: ${this.lastGitCommitTime}`);
+            const gitExtension = vscode.extensions.getExtension('vscode.git')?.exports;
+            const api = gitExtension?.getAPI(1);
+            const repo = api?.repositories[0];
+            if (!repo) {
+                this.lastGitCommitTime = new Date(Date.now() - 24 * 60 * 60 * 1000); // fallback
+                return;
+            }
+            const logEntries = await repo.log({ maxEntries: 1 });
+            if (logEntries && logEntries.length > 0) {
+                this.lastGitCommitTime = logEntries[0].authorDate;
+            } else {
+                this.lastGitCommitTime = new Date(Date.now() - 24 * 60 * 60 * 1000); // fallback
             }
         } catch (error) {
             console.warn('Failed to get last git commit time:', error);
-            // If git command fails, use a default time (24 hours ago)
             this.lastGitCommitTime = new Date(Date.now() - 24 * 60 * 60 * 1000);
         }
     }
@@ -53,8 +51,12 @@ export class GitConversationTracker {
     public async outputLatestConversationToFile(conversations: Conversation[]): Promise<void> {
         try {
             // Ensure the .chatlogger directory exists
-            const chatloggerDir = path.dirname(this.outputFilePath);
-            await fs.ensureDir(chatloggerDir);
+            const chatloggerDir = vscode.Uri.joinPath(this.workspaceFolder.uri, '.chatlogger');
+            try {
+                await vscode.workspace.fs.createDirectory(chatloggerDir);
+            } catch (e) {
+                // Ignore if already exists
+            }
 
             // Update the last git commit time
             await this.updateLastGitCommitTime();
@@ -79,8 +81,11 @@ export class GitConversationTracker {
             }
 
             // Write to file (flat array)
-            await fs.writeJson(this.outputFilePath, newMessages, { spaces: 2 });
-            console.log(`All new messages since git commit saved to: ${this.outputFilePath}`);
+            await vscode.workspace.fs.writeFile(
+                this.outputFileUri,
+                Buffer.from(JSON.stringify(newMessages, null, 2), 'utf8')
+            );
+            console.log(`All new messages since git commit saved to: ${this.outputFileUri.fsPath}`);
         } catch (error) {
             console.error('Error outputting conversation to file:', error);
             throw error;
@@ -92,8 +97,8 @@ export class GitConversationTracker {
         await this.outputLatestConversationToFile(conversations);
     }
 
-    public getOutputFilePath(): string {
-        return this.outputFilePath;
+    public getOutputFileUri(): vscode.Uri {
+        return this.outputFileUri;
     }
 
     public getLastGitCommitTime(): Date | null {

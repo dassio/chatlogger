@@ -68,7 +68,7 @@ export class ChatLogger {
     private initializeGitTracker() {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (workspaceFolder) {
-            this.gitTracker = new GitConversationTracker(workspaceFolder.uri.fsPath);
+            this.gitTracker = new GitConversationTracker(workspaceFolder);
             this.outputChannel.appendLine('Git conversation tracker initialized');
         } else {
             this.outputChannel.appendLine('No workspace folder found, git tracker not initialized');
